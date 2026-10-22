@@ -42,8 +42,9 @@ API Key 一律通过环境变量注入（`DEEPSEEK_API_KEY`），**任何情况�
 
 ```
 mockverse/
+├── STATUS.md        # ★ 项目状态快照（新会话/新工作日唯一入口）
 ├── docs/            # 架构图、E-R 图、面试 QA 手册
 │   └── journal/     # 每日复盘日志
-├── monolith/        # 第二周单体版（D8 起）
+├── labs/           # 各里程碑代码归档（源模块在 adk-java/examples/ 下）
 └── services/        # 第三周微服务版（D15 起）
 ```
