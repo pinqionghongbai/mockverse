@@ -9,7 +9,7 @@
 ## Title
 
 ```
-McpToolset hangs silently for ~5 minutes per retry (3 retries) when stdio command is an npm shim ("npx") on Windows
+McpToolset hangs silently for ~15 minutes (3 x 5-minute timeout) when stdio command is an npm shim ("npx") on Windows
 ```
 
 ## Body
@@ -24,9 +24,10 @@ inside `McpToolset.getTools()`.
 
 After digging into it, the "hang" is actually a very slow failure loop:
 each initialization attempt waits out the full default
-`initializationTimeout` (5 minutes), then the sync retry logic retries up
-to 3 times, so the program stays silent for roughly 4 x 5 = 20 minutes
-before a `McpToolLoadingException` (wrapped
+`initializationTimeout` (5 minutes), and the sync retry logic re-runs the
+same doomed initialization, so the program stays silent for a measured
+**900 seconds (~15 minutes: 3 attempts x 5-minute timeout)** before a
+`McpToolLoadingException` (wrapped
 `Client failed to initialize by explicit API call`) finally surfaces —
 and even that is invisible unless an SLF4J provider is on the classpath,
 which the samples don't include by default.
@@ -61,12 +62,18 @@ JVM/OS-level cause. Inside ADK, however, the failure is masked by:
 3. Without an SLF4J provider (the default for the samples), even the
    retry ERROR logs are swallowed, leaving zero output on the console.
 
-Observed log once an SLF4J provider is added:
+Observed log once an SLF4J provider is added (full run, timestamps from
+the measured repro):
 
 ```
 ERROR com.google.adk.tools.mcp.McpToolset - Unexpected error during tool loading, retry attempt 1
 java.lang.RuntimeException: Client failed to initialize by explicit API call
     at io.modelcontextprotocol.client.LifecycleInitializer...
+ERROR ... retry attempt 2
+ERROR ... retry attempt 3
+ERROR com.google.adk.tools.mcp.McpToolset - Failed to load tools after multiple retries due to unexpected error.
+com.google.adk.tools.mcp.McpToolsetException$McpToolLoadingException
+    (total elapsed: 900,857 ms)
 ```
 
 ## Minimal reproduction (public API only)
@@ -87,7 +94,7 @@ List<BaseTool> tools = toolset.getTools(null).toList().blockingGet();
 
 | command          | result                                                       |
 | ---------------- | ------------------------------------------------------------ |
-| `npx`            | silent block ≥ 5 min per retry; ~20 min total, then `McpToolLoadingException`; no `node.exe` ever spawned |
+| `npx`            | silent block, measured 900 s (~15 min) total, then `McpToolLoadingException`; no `node.exe` ever spawned |
 | `npx.cmd`        | OK in ~3.5 s, 14 tools loaded                                |
 
 ## Workaround
