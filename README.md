@@ -30,8 +30,8 @@
 | mcp java-sdk | （D18 使用后填写） | |
 | langchain4j | （D3 使用后填写） | |
 | Spring Boot | （D8 建工程时填写） | |
-| Ollama + 模型 | （安装后填写） | |
-| DeepSeek API | （注册后填写模型名） | |
+| Ollama + 模型 | 0.40.8（qwen2.5:7b 下载中，完成后确认） | 2026-10-22 |
+| DeepSeek API | deepseek-chat（deepseek-flash 引擎，2026-10-22 验证连通） | 2026-10-22 |
 
 ## 安全须知
 
