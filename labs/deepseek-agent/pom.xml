@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MockVerse D3: 基于 DeepSeek 的第一个 Agent（桥接 contrib/langchain4j） -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.google.adk</groupId>
+        <artifactId>google-adk-examples</artifactId>
+        <version>1.13.0</version><!-- {x-version-update:google-adk:current} -->
+        <relativePath>..</relativePath>
+    </parent>
+
+    <groupId>com.mockverse</groupId>
+    <artifactId>mockverse-deepseek-agent</artifactId>
+    <name>MockVerse - DeepSeek Agent</name>
+    <description>MockVerse D3 里程碑: ADK Agent 接入 DeepSeek(OpenAI 兼容端点), 验证模型层可插拔</description>
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <java.version>17</java.version>
+        <exec.mainClass>com.mockverse.agent.DeepSeekAgentRun</exec.mainClass>
+        <google-adk.version>${project.version}</google-adk.version>
+        <langchain4j.version>1.12.2</langchain4j.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>${google-adk.version}</version>
+        </dependency>
+        <!-- ADK <-> LangChain4j 桥接: 让 ADK 使用 LangChain4j 生态的任意模型 -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-langchain4j</artifactId>
+            <version>${google-adk.version}</version>
+        </dependency>
+        <!-- LangChain4j 的 OpenAI 兼容客户端(DeepSeek 走此端点) -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+            <version>1.2</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <parameters>true</parameters>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.2.0</version>
+                <configuration>
+                    <mainClass>${exec.mainClass}</mainClass>
+                    <classpathScope>runtime</classpathScope>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

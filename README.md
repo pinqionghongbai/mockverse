@@ -28,7 +28,7 @@
 | google-adk | 1.13.0（源码克隆至 E:\cluadeworkbase\adk-java，2026-10-23） | 2026-10-23 |
 | a2a-java-sdk | （D5 使用后填写） | |
 | mcp java-sdk | （D18 使用后填写） | |
-| langchain4j | （D3 使用后填写） | |
+| langchain4j | 1.12.2（BOM 管理，adk-java 父 pom；桥接模块 google-adk-langchain4j 1.13.0，2026-10-24 验证通过） | 2026-10-24 |
 | Spring Boot | （D8 建工程时填写） | |
 | Ollama + 模型 | 0.40.8（qwen2.5:7b 拉取受代理 fake-ip DNS 污染阻塞，降级备胎，详见 docs/ollama-issue.md） | 2026-10-22 |
 | DeepSeek API | deepseek-chat（deepseek-flash 引擎，2026-10-22 验证连通） | 2026-10-22 |
