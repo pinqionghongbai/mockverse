@@ -5,6 +5,15 @@
 ## 1. google/adk-java — Issue #1686（2026-10-22）
 
 **链接**: https://github.com/google/adk-java/issues/1686（open，署名 pinqionghongbai）
+**进展**: 2026-10-22 10:21 追加首条技术评论（issue 正文 + follow-up 评论两部分构成完整证据链）
+
+**评论补强内容**（构成完整贡献的三块）:
+1. 精确化 retry 语义：MAX_RETRIES=3 实为 3 次总尝试（1 初始 + 2 重试），900,857ms = 3×300s 严丝合缝
+2. 复现完整性：附件说明 + Windows-only 边界声明（Linux/macOS 不受影响）
+3. **跨生态对齐分析**（命中该仓库 CONTRIBUTING 的"与 adk-python 对齐"原则）:
+   Python MCP SDK 在 SDK 层有 `get_windows_executable_command`（shutil.which 解析 .cmd/.bat/.exe/.ps1），
+   Java MCP SDK 的 StdioClientTransport 无对应物 → adk-java 继承了缺陷 →
+   建议修复可落在本仓库 DefaultMcpTransportBuilder 或上游 Java MCP SDK，实现与 Python 生态对齐
 
 **简历一句话**（英文表述供参考）:
 > Reported a Windows-specific defect to google/adk-java (Google's official Agent Development
@@ -22,8 +31,11 @@
 **技术细节支撑**: 见 qa-manual.md Q14/Q16 + labs/mcp-own-test/ReproToolset.java + docs/issue-final-adk-java.md
 
 **后续动作（待办）**:
-- [ ] 若维护者回应 → 跟进讨论 / 提 PR（需签 Google CLA，线上电子签）
+- [ ] 签 Google CLA（https://cla.developers.google.com/，线上电子签，提 PR 前必须）
+- [ ] 若维护者回应 → 跟进讨论 / 提 PR
+- [ ] PR 路线（若走 adk-java 侧）: fork → 改 DefaultMcpTransportBuilder（~15 行：Windows 检测 + shutil.which 式解析）→
+      记得 CONTRIBUTING 三条硬规则：google-java-format 自动格式化、**单提交**（amend/rebase -i）、AI 初稿需人类精炼
 - [ ] 若被合并或标记 → 更新本文件状态与简历表述
-- [ ] 可选：在 issue 下追加评论，补充长跑实测的精确数据（900,857ms）与三次 retry 完整日志——"报告后继续深挖"在开源社区是加分姿态
+- [ ] 定期回访 issue（建议每 2-3 天，D7/D14 复盘时顺带检查）
 
 ## 2.（预留）后续 PR / 其他贡献

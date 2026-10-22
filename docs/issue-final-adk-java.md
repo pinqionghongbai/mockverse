@@ -128,3 +128,21 @@ Happy to send a PR for either suggestion. Thanks!
 5. Submit new issue
 6. 提交后把 issue 链接告诉浮浮酱 —— 归档进 qa-manual.md + 简历素材（"向 google/adk-java 报告 Windows 平台缺陷，提供最小复现与修复建议"）
 ```
+Follow-up with two clarifications after furt
+
+**1. Precise retry semantics.** The title says "3 retries", but to be
+exact: `MAX_RETRIES = 3` in `McpToolset` corresponds to **3 total
+attempts** (1 initial + 2 retries), because
+errors with `Flowable.range(1, MAX_RETRIES)`. The measured 900,857 ms
+matches exactly 3 × 300 s. Apologies for the imprecision in the title.
+
+**2. Repro completeness.** Full runnable version is attached as
+`ReproToolset.java` (compiles against `com.google.adk:google-adk:1.13.0`
++ Guava; replace `<some-dir>` with any existing absolute path).
+
+Also worth noting for scope: this is **Windows-only** — on Linux/macOS
+npm installs `npx` as a real shebang script,
+there unchanged. The MCP docs for other language SDKs already recommend
+`cmd /c` wrapping on Windows for the same re
+in `DefaultMcpTransportBuilder` (suggestion 2) would bring the Java SDK
+to parity with the rest of the ecosystem.
