@@ -26,8 +26,8 @@
 | Git | 2.49.0.windows.1 | 2026-10-22 |
 | Docker | 29.4.1 | 2026-10-22 |
 | google-adk | 1.13.0（源码克隆至 E:\cluadeworkbase\adk-java，2026-10-23） | 2026-10-23 |
-| a2a-java-sdk | （D5 使用后填写） | |
-| mcp java-sdk | （D18 使用后填写） | |
+| a2a-java-sdk | （定位修正：adk-java 自带 A2A 实现，本项目对 a2a-java 为"轻量实证对比+extras 设计参考"，D6 跑其 Hello World 后填版本） | |
+| mcp java-sdk | **2.0.0**（adk-java core 传递依赖，m2 已落地；D3 审计实证） | 2026-10-24 |
 | langchain4j | 1.12.2（BOM 管理，adk-java 父 pom；桥接模块 google-adk-langchain4j 1.13.0，2026-10-24 验证通过） | 2026-10-24 |
 | Spring Boot | （D8 建工程时填写） | |
 | Ollama + 模型 | 0.40.8（qwen2.5:7b 拉取受代理 fake-ip DNS 污染阻塞，降级备胎，详见 docs/ollama-issue.md） | 2026-10-22 |
