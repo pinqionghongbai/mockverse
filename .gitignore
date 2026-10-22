@@ -1,0 +1,25 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 构建产物
+target/
+build/
+*.class
+*.jar
+!gradle-wrapper.jar
+
+# 环境与密钥（严禁提交）
+.env
+*.env
+secrets/
+api-keys*
+
+# 日志
+*.log
+logs/
+
+# 系统
+.DS_Store
+Thumbs.db
