@@ -1,0 +1,1 @@
+198.18.0.0/16 段说明: 本机代理软件 fake-ip 模式接管了 DNS，ollama 的 CDN 下载被判定为非公网地址拒绝。解决路径（非紧急）: ①代理软件将 ollama.com/registry.ollama.ai 加入直连规则 ②或临时关闭 fake-ip 模式重拉 ③或设 OLLAMA_HOST 绕过。当前决策: DeepSeek 为主力，本地模型降级为 D25 后的可选优化项

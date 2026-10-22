@@ -25,12 +25,12 @@
 | Maven | 3.9.8 | 2026-10-22 |
 | Git | 2.49.0.windows.1 | 2026-10-22 |
 | Docker | 29.4.1 | 2026-10-22 |
-| google-adk | （D2 首次构建后填写） | |
+| google-adk | 1.13.0（源码克隆至 E:\cluadeworkbase\adk-java，2026-10-23） | 2026-10-23 |
 | a2a-java-sdk | （D5 使用后填写） | |
 | mcp java-sdk | （D18 使用后填写） | |
 | langchain4j | （D3 使用后填写） | |
 | Spring Boot | （D8 建工程时填写） | |
-| Ollama + 模型 | 0.40.8（qwen2.5:7b 下载中，完成后确认） | 2026-10-22 |
+| Ollama + 模型 | 0.40.8（qwen2.5:7b 拉取受代理 fake-ip DNS 污染阻塞，降级备胎，详见 docs/ollama-issue.md） | 2026-10-22 |
 | DeepSeek API | deepseek-chat（deepseek-flash 引擎，2026-10-22 验证连通） | 2026-10-22 |
 
 ## 安全须知
