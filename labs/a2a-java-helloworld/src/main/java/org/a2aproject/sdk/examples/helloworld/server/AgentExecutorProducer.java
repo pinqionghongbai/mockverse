@@ -1,0 +1,30 @@
+package org.a2aproject.sdk.examples.helloworld.server;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Produces;
+
+import org.a2aproject.sdk.server.agentexecution.AgentExecutor;
+import org.a2aproject.sdk.server.agentexecution.RequestContext;
+import org.a2aproject.sdk.server.tasks.AgentEmitter;
+import org.a2aproject.sdk.spec.A2AError;
+import org.a2aproject.sdk.spec.UnsupportedOperationError;
+
+/** MockVerse D6: 与 a2a-java 官方示例一致的最小 AgentExecutor(固定返回 Hello World). */
+@ApplicationScoped
+public class AgentExecutorProducer {
+
+    @Produces
+    public AgentExecutor agentExecutor() {
+        return new AgentExecutor() {
+            @Override
+            public void execute(RequestContext context, AgentEmitter emitter) throws A2AError {
+                emitter.sendMessage("Hello World");
+            }
+
+            @Override
+            public void cancel(RequestContext context, AgentEmitter emitter) throws A2AError {
+                throw new UnsupportedOperationError();
+            }
+        };
+    }
+}

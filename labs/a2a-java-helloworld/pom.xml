@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<!--
+  MockVerse D6: a2aproject/a2a-java 官方 SDK Hello World 实证工程.
+  说明: 直接依赖已发布的 1.4.0.Final 制品(与克隆源码 1.4.1-SNAPSHOT 同一套示例代码),
+        避免从源码构建快照版所需的 protobuf/多模块全量编译.
+-->
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.a2aproject.sdk</groupId>
+        <artifactId>a2a-java-sdk-parent</artifactId>
+        <version>1.4.0.Final</version>
+        <relativePath/>
+    </parent>
+
+    <artifactId>mockverse-a2a-java-helloworld</artifactId>
+    <packaging>jar</packaging>
+
+    <name>MockVerse - a2a-java Hello World Server</name>
+    <description>D6 选型对比: a2aproject/a2a-java 官方 SDK 的 Hello World 服务端</description>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- BOM 的 <properties> 不随 dependencyManagement import 继承, 需显式覆盖, 否则启动时配置校验报 SRCFG00011 -->
+        <quarkus.native.builder-image>graalvm</quarkus.native.builder-image>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.a2aproject.sdk</groupId>
+            <artifactId>a2a-java-sdk-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.a2aproject.sdk</groupId>
+            <artifactId>a2a-java-sdk-reference-jsonrpc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-resteasy</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.enterprise</groupId>
+            <artifactId>jakarta.enterprise.cdi-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.ws.rs</groupId>
+            <artifactId>jakarta.ws.rs-api</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>generate-code</goal>
+                            <goal>generate-code-tests</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <jvmArgs>--add-opens=java.base/java.lang=ALL-UNNAMED</jvmArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
