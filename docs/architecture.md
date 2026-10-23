@@ -142,7 +142,7 @@ graph LR
 | 阶段 | 架构形态 | 状态 |
 |---|---|---|
 | D1-D6 | 单进程 Agent + 跨进程 A2A 示例 + MCP 工具 | ✅ 已实证 |
-| D8-D14 | 单体 v1：一个 Spring Boot 服务装三个 Agent + MySQL | 🟡 进行中（D9 面试官 / D10 RAG 知识库 / D11 简历诊断已落地） |
+| D8-D14 | 单体 v1：一个 Spring Boot 服务装三个 Agent + MySQL | 🟡 进行中（D9 面试官 / D10 RAG 知识库 / D11 简历诊断已落地；D12 待做多 Agent 进程内编排） |
 | D15-D21 | 微服务化：三服务 A2A 互联 + MCP 判题 + Kafka 异步 | ⏳ |
 | D22-D26 | 工程化：Redis 缓存 + Nacos + Compose + 前端 | ⏳ |
 | D27-D30 | 收尾：简历 + 演示视频 + 已知局限清单 | ⏳ |
