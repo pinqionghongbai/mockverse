@@ -1,7 +1,8 @@
 -- ============================================================
--- MockVerse 初始化脚本 v0.1 (D8 落地版)
--- 相对 docs/db-design.md D7 初稿的唯一变更:
---   session -> interview_session (避免与 JDBC/HTTP Session 混淆)
+-- MockVerse 初始化脚本 v0.2 (D8 落地版 + D11 增补)
+-- 相对 docs/db-design.md D7 初稿的变更:
+--   D8: session -> interview_session (避免与 JDBC/HTTP Session 混淆)
+--   D11: 新增 resume_diagnosis (简历诊断结果, 明细存 JSON 列)
 -- 约定: 主键 BIGINT 雪花 ID, 应用层生成 (MyBatis-Plus ASSIGN_ID)
 -- ============================================================
 CREATE DATABASE IF NOT EXISTS mockverse
@@ -70,3 +71,23 @@ CREATE TABLE IF NOT EXISTS `chat_message` (
   KEY `idx_session_created` (`session_id`, `created_at`),
   KEY `idx_question` (`question_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='聊天消息表';
+
+-- D11: 简历诊断结果
+-- 设计要点: 明细维度与问题清单存 JSON 列, 不再拆成两张子表。
+-- 理由: 这两类数据只随诊断单整体读取/展示, 从不按维度或问题单独查询,
+-- 拆表只会增加 join 成本与维护负担; 需要统计时 MySQL 8 的 JSON 函数够用。
+CREATE TABLE IF NOT EXISTS `resume_diagnosis` (
+  `id`             BIGINT       NOT NULL COMMENT '主键(雪花ID)',
+  `user_id`        BIGINT       NOT NULL COMMENT '所属用户',
+  `resume_text`    MEDIUMTEXT   NOT NULL COMMENT '原始简历文本',
+  `overall_score`  INT          NOT NULL COMMENT '总分 0-100',
+  `dimensions`     JSON         NOT NULL COMMENT '各维度评分与点评 [{name,score,strengths,weaknesses}]',
+  `issues`         JSON         NOT NULL COMMENT '问题清单 [{severity,quote,problem,suggestion}]',
+  `summary`        VARCHAR(1000)         DEFAULT NULL COMMENT '一句话总评',
+  `model`          VARCHAR(64)  NOT NULL COMMENT '生成该结果的模型名(便于换模型后对比)',
+  `elapsed_ms`     INT          NOT NULL DEFAULT 0 COMMENT '模型耗时',
+  `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_user_created` (`user_id`, `created_at` DESC),
+  KEY `idx_score` (`overall_score`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='简历诊断结果表';

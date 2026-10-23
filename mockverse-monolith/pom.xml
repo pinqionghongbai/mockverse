@@ -24,6 +24,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- 与 Spring Boot 3.3.x 配套的 MyBatis-Plus 线; 版本锁定表 README.md 已登记 -->
         <mybatis-plus.version>3.5.7</mybatis-plus.version>
+        <!-- D3 起锁定的 ADK 线, 与 adk-java 源码克隆 1.13.0 一致 -->
+        <adk.version>1.13.0</adk.version>
+        <langchain4j.version>1.12.2</langchain4j.version>
+        <!-- D10: 本地 ONNX embedding 模块走 beta 线, 与 core 1.12.2 对齐 -->
+        <langchain4j.embeddings.version>1.12.2-beta22</langchain4j.embeddings.version>
     </properties>
 
     <dependencies>
@@ -46,6 +51,39 @@
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- D9: ADK Agent 编排 + LangChain4j 桥接 (DeepSeek 走 OpenAI 兼容协议) -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-langchain4j</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- D10: 本地 ONNX embedding (bge-small-zh-v1.5, 512 维)。
+             DeepSeek 没有 /embeddings 接口 (实测 404), Ollama 拉模型被 fake-ip DNS 卡住,
+             所以用 jar 内自带的 ONNX 模型, 不依赖任何外部服务与 API Key。 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-bge-small-zh-v15</artifactId>
+            <version>${langchain4j.embeddings.version}</version>
+        </dependency>
+
+        <!-- D10: pgvector 数据源 (与主库 MySQL 并存, 只给向量检索用) -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
 

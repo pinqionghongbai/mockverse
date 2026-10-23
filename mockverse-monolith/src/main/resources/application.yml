@@ -26,6 +26,22 @@ mybatis-plus:
       # 主键统一雪花 ID (应用层生成, 分库不冲突)
       id-type: assign_id
 
+mockverse:
+  interview:
+    app-name: mockverse
+    max-rounds: 5
+    prompt-version: v3
+  vector:
+    # pgvector 是独立数据源, 不参与 Spring 的 DataSource 自动配置
+    host: ${PG_HOST:localhost}
+    port: ${PG_PORT:5433}
+    database: ${PG_DATABASE:mockverse}
+    username: ${PG_USER:mockverse}
+    password: ${PG_PASSWORD:}
+    # bge-small-zh-v1.5 输出 512 维, 与建表 DDL 的 vector(512) 必须一致
+    dimensions: 512
+    top-k: 3
+
 logging:
   level:
     com.mockverse.monolith: debug

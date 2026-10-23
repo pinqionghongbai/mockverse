@@ -27,10 +27,12 @@
 | google-adk | 1.13.0（源码克隆至 E:\cluadeworkbase\adk-java，2026-10-23） | 2026-10-23 |
 | a2a-java-sdk | 两条版本线：**0.3.2.Final**（`io.github.a2asdk`，A2A 协议 0.3.0；adk-java a2a 模块的底层 SDK，本项目主链路，示例覆写为 0.3.0.Beta1）vs **1.4.0.Final**（`org.a2aproject.sdk`，A2A 协议 1.0，D6 跑通 Hello World 实证）。两者报文不互通 | 2026-10-26 |
 | mcp java-sdk | **2.0.0**（adk-java core 传递依赖，m2 已落地；D3 审计实证） | 2026-10-24 |
-| langchain4j | 1.12.2（BOM 管理，adk-java 父 pom；桥接模块 google-adk-langchain4j 1.13.0，2026-10-24 验证通过） | 2026-10-24 |
+| langchain4j | 1.12.2（`mockverse-monolith` 显式 `<version>` 锁定；桥接模块 `google-adk-langchain4j` 1.13.0，2026-10-24 验证通过，D9 复用） | 2026-10-24 |
 | Spring Boot | **3.3.1**（`<parent>` 引入；选 3.3.x 而非 4.0.x 是为了与 MyBatis-Plus 3.5.7 的 `spring-boot3-starter` 稳定配套） | 2026-10-28 |
 | MyBatis-Plus | **3.5.7**（`mybatis-plus-spring-boot3-starter`，Boot 3 专用，不要用 Boot 2 的 `mybatis-plus-boot-starter`） | 2026-10-28 |
 | MySQL | **8.0**（Docker 容器 `mockverse-mysql`，映射 3307；本机 3306 另有 MySQL 26.7 实例，避免冲突） | 2026-10-28 |
+| pgvector | **pgvector/pgvector:pg16**（Docker 容器 `mockverse-pg`，映射 5433；扩展版本 0.8.7） | 2026-10-31 |
+| Embedding 模型 | **bge-small-zh-v1.5**（本地 ONNX，随 `langchain4j-embeddings-bge-small-zh-v15:1.12.2-beta22` 分发，512 维，不依赖外部 API） | 2026-10-31 |
 | Ollama + 模型 | 0.40.8（qwen2.5:7b 拉取受代理 fake-ip DNS 污染阻塞，降级备胎，详见 docs/ollama-issue.md） | 2026-10-22 |
 | DeepSeek API | deepseek-chat（deepseek-flash 引擎，2026-10-22 验证连通） | 2026-10-22 |
 
@@ -48,8 +50,9 @@ mockverse/
 │   └── journal/         # 每日复盘日志
 ├── labs/                # 各里程碑代码归档（源模块在 adk-java/examples/ 下）
 ├── mockverse-monolith/  # ★ D8 起的单体 v1（Spring Boot 3.3.1 + MyBatis-Plus + MySQL）
-│   ├── src/main/java/com/mockverse/monolith/{entity,mapper,controller,smoke}/
-│   ├── src/main/resources/db/schema.sql   # 四张表 DDL
+│   ├── src/main/java/com/mockverse/monolith/{entity,mapper,controller,service,agent,rag,smoke,config}/
+│   ├── src/main/resources/db/schema.sql        # 五张表 DDL（D11 新增 resume_diagnosis）
+│   ├── src/main/resources/knowledge/           # RAG 语料 7 个 md / 50 篇（D10 已入库 pgvector）
 │   └── dev.env          # 本地库连接（被 .gitignore 排除，勿提交）
 └── services/            # 第三周微服务版（D15 起）
 ```

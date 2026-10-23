@@ -1,0 +1,4 @@
+spring:
+  main:
+    # 冒烟只验证业务链路, 不需要 HTTP 服务; 关掉可避免 8081 被上一次没退干净的进程占用
+    web-application-type: none

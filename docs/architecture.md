@@ -85,7 +85,7 @@ graph TB
     end
 
     subgraph data["数据层"]
-        MYSQL[("MySQL<br/>user/session/question/chat_message")]
+        MYSQL[("MySQL<br/>user / interview_session / question<br/>chat_message / resume_diagnosis")]
         REDIS[("Redis<br/>题库缓存 + 分布式锁")]
         PG[("pgvector<br/>50 篇八股语料向量")]
     end
@@ -142,9 +142,53 @@ graph LR
 | 阶段 | 架构形态 | 状态 |
 |---|---|---|
 | D1-D6 | 单进程 Agent + 跨进程 A2A 示例 + MCP 工具 | ✅ 已实证 |
-| D8-D14 | 单体 v1：一个 Spring Boot 服务装三个 Agent + MySQL | ⏳ 下周 |
+| D8-D14 | 单体 v1：一个 Spring Boot 服务装三个 Agent + MySQL | 🟡 进行中（D9 面试官 / D10 RAG 知识库 / D11 简历诊断已落地） |
 | D15-D21 | 微服务化：三服务 A2A 互联 + MCP 判题 + Kafka 异步 | ⏳ |
 | D22-D26 | 工程化：Redis 缓存 + Nacos + Compose + 前端 | ⏳ |
 | D27-D30 | 收尾：简历 + 演示视频 + 已知局限清单 | ⏳ |
+
+> **D9 已落地的单体内部结构**（面试可讲的"从示例到工程"的跨越）：
+>
+> ```
+> InterviewController (HTTP)
+>   └─ InterviewService（会话/轮次/落库的事务边界）
+>        └─ AgentRuntime（Runner + InMemorySessionService，管理 ADK 生命周期）
+>             └─ LlmAgent（instruction 由 InterviewerPrompts 版本化）
+>                  ├─ model: DeepSeek（经 google-adk-langchain4j 适配）
+>                  └─ tool: pick_question → QuestionTools → QuestionMapper → MySQL
+> ```
+>
+> 关键点：**Agent 不是被"调用一次"，而是被"装配成 Bean"**；工具是 Spring Bean，所以能拿 Mapper；会话状态在 Runtime 里，业务状态在 `chat_message` 里，两者职责分开。
+>
+> **D10 已落地的 RAG 链路**（与面试链路并列，互不依赖）：
+>
+> ```
+> KnowledgeController (HTTP)
+>   └─ KnowledgeService（幂等入库 / 检索入口）
+>        ├─ KnowledgeLoader   → classpath:knowledge/*.md，按 `## ` 切 50 块
+>        ├─ PgVectorStore     → 自持 Hikari 池 → pgvector（vector(512), HNSW, 余弦）
+>        │    └─ EmbeddingModel → 本地 ONNX bge-small-zh-v1.5（不联网、无 API Key）
+>        └─ RagAnswerService  → 检索结果拼上下文 → DeepSeek(0.2) → 带 [编号] 引用的回答
+> ```
+>
+> 两个数据源刻意不共享：MySQL 走 Spring 自动配置的 DataSource（MyBatis-Plus 用），pgvector 的连接池是 `PgVectorStore` 的私有资源。原因见 `docs/rag-d10.md` 第三节——**声明第二个 DataSource Bean 会让 Boot 的 MySQL 自动配置整体退避**。
+>
+> **可用性隔离**：pgvector 连不上时只降级知识库接口（503），面试链路照常。
+
+> **D11 已落地的简历诊断链路**（同样并列，只依赖 MySQL）：
+>
+> ```
+> ResumeController (HTTP)
+>   └─ ResumeDiagnosisService
+>        ├─ diagnosisChatModel  → DeepSeek(0.3, response_format=json_object)
+>        ├─ 三层防线            → 提示词写死 schema / 剥 markdown 代码块 / 语义校验
+>        │    └─ 校验失败抛异常，**不落库**（脏数据比没有数据更难处理）
+>        ├─ warnIfQuoteNotVerbatim → 验证"逐字摘自原文"的承诺（只告警，不阻断）
+>        └─ ResumeDiagnosisMapper → resume_diagnosis（dimensions/issues 存 MySQL JSON 列）
+> ```
+>
+> 与另外两条链路的关键差别：**它的输出要进数据库，所以"格式对不对"从体验问题变成了数据正确性问题**。
+> `json_object` 只保证语法合法，字段名拼错、维度少一个、分数给 120 它一样放行——所以语义校验是这条链路的主体，
+> 而不是可选项。详见 `docs/journal/D11-2026-11-01.md`。
 
 > **面试用法**：讲这张图时先说"实线部分我都能当场跑给你看"，再说"虚线部分是 30 天计划的剩余部分"。**承认未完成的部分不扣分，把未完成的画成已完成才致命。**
