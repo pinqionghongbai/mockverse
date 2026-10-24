@@ -142,3 +142,10 @@ MySQL 恢复后**不重启应用** 2 秒内自愈，start / history 均 200。
 | 服务隔离实证 | 只停 MySQL：interview/resume `DEGRADED` + 端点 503，**knowledge-service 仍 `UP` 且 search 200** |
 
 详见 `docs/journal/D15-2026-11-05.md` 二十节。
+
+**整改后再检查（2026-11-05，Bug I）**：`QuestionSeeder` 的 10 条种子数据是逐条 insert、无事务，
+中途失败会留下"半套题库"，而下次启动的 `selectCount > 0` 判断会认为"已有数据"直接跳过 →
+题库永久残缺且日志看起来完全正常（静默降级）。已用 `TransactionTemplate` 包成原子操作
+（不能直接加 `@Transactional`——同类内部调用不走代理）。用临时库 `mockverse_seedtest` 验证：
+空库灌入 10 条、二次启动幂等跳过，验证后已清理。另修 3 处小瑕疵（注释错位、日志打 null、口径错误），
+并挂账 `reindex` 的 TRUNCATE 非原子（见 STATUS）。详见日志二十一节。
