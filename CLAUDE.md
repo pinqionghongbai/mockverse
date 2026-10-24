@@ -18,8 +18,9 @@
 
 ## 不可违反的既有纪律（每条都踩过坑，全文见 STATUS.md 第九节）
 
-- **API Key/token 严禁入 Git**：推送前扫暂存区（应 0 命中）与历史（已知 4 个自指
-  误报）；`.env`/`dev.env` 不入库；Key 只从环境变量读。
+- **API Key/token 严禁入 Git**：推送前扫暂存区（应 0 命中）与历史（当前 6 命中，
+  已逐条定位全部为扫描说明文字的自指误报，无真实 token；数字变化时更新本行）；
+  `.env`/`dev.env` 不入库；Key 只从环境变量读。
 - **push 用** `GITHUB_TOKEN="$GITHUB_TOKEN" git push`（credential helper 是引用式）。
 - **MYSQL_PORT 必须 3307**（默认 3306 会连到本机无关的 MySQL）。
 - **git 提交只在用户要求的流程内执行**（"开工/检查/继续推进"即含当日归档流程）。
