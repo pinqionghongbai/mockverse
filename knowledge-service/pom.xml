@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      知识库服务 (D15 机械拆分)。
+
+      裁剪口径: RAG 全链路 (pgvector + 本地 ONNX embedding + 0.2 低温模型)。
+      **不依赖 MySQL / MyBatis**——pgvector 由 PgVectorStore 组件私有连接池直连,
+      不参与 Spring DataSource 自动配置 (KnowledgeApplication 显式 exclude)。
+      JdbcTemplate/HikariCP 需要 spring-boot-starter-jdbc 提供, 但不能让它触发
+      DataSourceAutoConfiguration —— exclude 见 KnowledgeApplication。
+    -->
+    <parent>
+        <groupId>com.mockverse</groupId>
+        <artifactId>mockverse-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>knowledge-service</artifactId>
+    <name>MockVerse Knowledge Service</name>
+    <description>知识库 RAG 服务: search / ask / reindex / health, 8082, pgvector 直连</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- JdbcTemplate + HikariCP (PgVectorStore 私有连接池用) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
+        <!-- pgvector JDBC 驱动 -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!-- D10: 本地 ONNX embedding (bge-small-zh-v1.5, 512 维)。
+             不依赖任何外部 embedding 服务与 API Key。 -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-bge-small-zh-v15</artifactId>
+            <version>${langchain4j.embeddings.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

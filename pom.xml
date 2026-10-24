@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      MockVerse 多模块父 POM (D15 拆分决策)。
+
+      三个子模块 (interview/knowledge/resume-service) 的依赖版本全部集中在这里声明,
+      与 mockverse-monolith 的版本锁定表逐字一致 —— 版本锁定纪律: 禁止中途变更依赖版本,
+      父 POM 只做集中管理, 不做升级。
+
+      mockverse-monolith 不在 <modules> 里: 它是 tag v0.1-monolith 的参考基线,
+      保持独立可构建; D21 全链路联调通过后再退役。
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.mockverse</groupId>
+    <artifactId>mockverse-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>MockVerse Parent</name>
+    <description>MockVerse 微服务拆分父 POM: 三服务 + 统一依赖版本</description>
+
+    <modules>
+        <module>interview-service</module>
+        <module>knowledge-service</module>
+        <module>resume-service</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- 与 Spring Boot 3.3.x 配套的 MyBatis-Plus 线; 与单体逐字一致, 不升级 -->
+        <mybatis-plus.version>3.5.7</mybatis-plus.version>
+        <!-- D3 起锁定的 ADK 线, 与 adk-java 源码克隆 1.13.0 一致 -->
+        <adk.version>1.13.0</adk.version>
+        <langchain4j.version>1.12.2</langchain4j.version>
+        <!-- D10: 本地 ONNX embedding 模块走 beta 线, 与 core 1.12.2 对齐 -->
+        <langchain4j.embeddings.version>1.12.2-beta22</langchain4j.embeddings.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
