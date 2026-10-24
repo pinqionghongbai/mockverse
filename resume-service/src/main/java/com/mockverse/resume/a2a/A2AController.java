@@ -131,6 +131,20 @@ public class A2AController {
         SseEmitter emitter = new SseEmitter(180_000L);
         AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
 
+        // 客户端断开 / 超时 / 出错时主动取消上游（D16 七查补）。
+        // 不注册这三个回调的话，只有等到**下一次** emitter.send() 失败才会发现对端走了——
+        // 若模型迟迟不出第一个事件（30s 的 agentCompletionTimeout 之内），这段时间一直占着
+        // 一次模型调用在烧 token。cancel() 是幂等的，正常完成时再触发一次也无害。
+        Runnable cancelUpstream = () -> {
+            Flow.Subscription s = subscription.get();
+            if (s != null) {
+                s.cancel();
+            }
+        };
+        emitter.onCompletion(cancelUpstream);
+        emitter.onTimeout(cancelUpstream);
+        emitter.onError(t -> cancelUpstream.run());
+
         try {
             MessageSendParams sendParams = parse(params, MessageSendParams.class);
             requestHandler.onMessageSendStream(sendParams, null).subscribe(new Flow.Subscriber<>() {
@@ -146,7 +160,7 @@ public class A2AController {
                         emitter.send(SseEmitter.event().data(okResponse(id, event)));
                     } catch (IOException | IllegalStateException e) {
                         // 客户端断开或 emitter 已关闭：取消上游，避免继续消耗模型调用
-                        cancelUpstream();
+                        cancelUpstream.run();
                         emitter.complete();
                     }
                 }
@@ -160,13 +174,6 @@ public class A2AController {
                 @Override
                 public void onComplete() {
                     emitter.complete();
-                }
-
-                private void cancelUpstream() {
-                    Flow.Subscription s = subscription.get();
-                    if (s != null) {
-                        s.cancel();
-                    }
                 }
             });
         } catch (JSONRPCError e) {
@@ -191,13 +198,25 @@ public class A2AController {
         }
     }
 
-    /** params 解析失败按 JSON-RPC 规范归为 -32602（InvalidParams），而不是内部错误。 */
+    /**
+     * params 解析失败按 JSON-RPC 规范归为 -32602（InvalidParams），而不是内部错误。
+     *
+     * <p><b>必须显式挡 {@code params: null}</b>（D16 七查补）：{@code treeToValue(NullNode, T)}
+     * 不抛异常而是返回 {@code null}，一路传到 {@code requestHandler.onMessageSend(null, ...)}
+     * 才炸成 NPE，被外层 {@code catch (Exception)} 归成 -32603「服务内部错误」——
+     * 那会让调用方以为是我们坏了，实际是它自己没传参数。归错码比不报错更难查。
+     */
     private static <T> T parse(JsonNode params, Class<T> type) {
+        T value;
         try {
-            return Utils.OBJECT_MAPPER.treeToValue(params, type);
+            value = Utils.OBJECT_MAPPER.treeToValue(params, type);
         } catch (Exception e) {
             throw new InvalidParamsError("参数格式错误: " + e.getMessage());
         }
+        if (value == null) {
+            throw new InvalidParamsError("params 不能为空");
+        }
+        return value;
     }
 
     private static ResponseEntity<String> json(String body) {
