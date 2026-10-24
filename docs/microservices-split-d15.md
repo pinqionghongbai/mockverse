@@ -80,6 +80,14 @@ D17 用 RemoteA2AAgent 接回——这是"哪怕功能还没解耦"的诚实含�
 | Day | 动作 | 本方案对应点 |
 |---|---|---|
 | D16 | 三服务接入 adk-java a2a/webservice，AgentCard 可 curl | 表二的三张卡；knowledge/resume 的 agent 化 |
+
+> **D16 实际结果（2026-11-06 补注）**：本行的"接入 adk-java a2a/webservice"**做不到**——
+> ADK 1.13.0 的 `a2a/README.md` 描述了这个模块，但源码克隆里只有 `a2a/src`
+> （agent/common/converters/executor），Maven 中央仓库也没有制品。实际做法是自建传输层：
+> `AgentExecutor`（ADK 侧）+ `DefaultRequestHandler`（a2a SDK 侧）+ 自己的 `A2AController`
+> （HTTP/JSON-RPC 信封）。职责等价，**实现不等价**。详见
+> `docs/journal/D16-2026-11-06.md` 第二节。
+
 | D17 | interview 用 RemoteA2AAgent 调远端知识库/简历 Agent | 第三节 coordinator 摘除点的"接回" |
 | D18-D19 | MCP 判题 Server + judge_code 工具接入 | 架构图新增节点 |
 | D20 | Kafka 提交队列 | interview-service 侧新增 |
