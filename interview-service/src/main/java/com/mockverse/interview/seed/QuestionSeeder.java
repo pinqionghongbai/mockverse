@@ -30,6 +30,21 @@ public class QuestionSeeder implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        try {
+            seedIfEmpty();
+        } catch (RuntimeException e) {
+            // D15 收口后整改（十查补测发现）：MySQL 未就绪时**不能让整个进程退出**。
+            // 此前 selectCount 直接抛出 → SpringApplication "Application run failed" → 进程退出，
+            // 而 resume-service 在同样条件下能降级启动，两者可用性口径不一致。
+            // 微服务由编排器拉起，启动顺序不保证（knowledge-service 对 pgvector 早就是降级语义）。
+            // 代价：MySQL 恢复后不会自动补种，需重启本服务；期间题库为空时 start 返回 409。
+            log.warn("题库初始化失败，服务以降级状态启动（health 报 DEGRADED）: {}。"
+                    + "MySQL 恢复后需重启本服务才会补种种子数据", e.getMessage());
+        }
+    }
+
+    /** 幂等灌库。与 {@link #run} 分开，是为了让启动失败可被降级而不是打死进程。 */
+    private void seedIfEmpty() {
         Long existing = questionMapper.selectCount(Wrappers.<Question>lambdaQuery());
         if (existing != null && existing > 0) {
             log.info("题库已有 {} 道题，跳过种子数据", existing);
