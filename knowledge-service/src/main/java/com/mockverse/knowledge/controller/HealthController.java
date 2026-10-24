@@ -15,8 +15,11 @@ import java.util.Map;
  * 数据面是 pgvector（由 PgVectorStore 组件私有连接池直连）。它同时证明三件事:
  * Web 层能起、依赖注入能通、向量库能连上 pgvector。
  *
- * <p>pgvector 连不上时仍返回 200 + status=DEGRADED——与 PgVectorStore 的降级设计一致
- * （"启动成功但知识库不可用"，不拖垮进程），调用方看 status 字段判断。
+ * <p>pgvector 不可用时返回 200 + status=DEGRADED，**不抛 500**——与 PgVectorStore 的
+ * 降级设计一致（"启动成功但知识库不可用"，不拖垮进程），调用方看 status 字段判断。
+ * 这里必须 try/catch：`available` 只在启动时置位，运行期宕机要靠 count() 抛出的异常
+ * 才能发现（D15 五轮审查第三轮实证：不 catch 的话 health 会返回 500 通用错误体，
+ * 与本节契约不符）。
  */
 @RestController
 @RequestMapping("/api")
@@ -33,13 +36,21 @@ public class HealthController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("app", "knowledge-service");
         body.put("framework", "Spring Boot 3.3.1");
-        body.put("status", vectorStore.isAvailable() ? "UP" : "DEGRADED");
 
         Map<String, Object> vectorDb = new LinkedHashMap<>();
-        vectorDb.put("available", vectorStore.isAvailable());
+        String status = "UP";
         if (vectorStore.isAvailable()) {
-            vectorDb.put("chunks", vectorStore.count());
+            try {
+                vectorDb.put("chunks", vectorStore.count());
+            } catch (RuntimeException e) {
+                status = "DEGRADED";
+                vectorDb.put("error", e.getMessage());
+            }
+        } else {
+            status = "DEGRADED";
         }
+        body.put("status", status);
+        vectorDb.put("available", "UP".equals(status));
         body.put("vectorStore", vectorDb);
         return body;
     }

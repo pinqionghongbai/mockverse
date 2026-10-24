@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -131,8 +132,16 @@ public class PgVectorStore {
         if (!available) {
             return 0;
         }
-        Integer n = jdbc.queryForObject("SELECT count(*) FROM knowledge_chunk", Integer.class);
-        return n == null ? 0 : n;
+        try {
+            Integer n = jdbc.queryForObject("SELECT count(*) FROM knowledge_chunk", Integer.class);
+            return n == null ? 0 : n;
+        } catch (DataAccessException e) {
+            // 启动后 pgvector 宕掉：available 仍是 true，但查询会失败。
+            // 转成 VectorStoreUnavailableException 让调用方拿到 503 语义。
+            // **不**把 available 置 false：Hikari 会在下次调用时自动重连，毒化标志会让
+            // "依赖恢复后必须重启应用"——D15 实测过 Hikari 惰性重连是自愈的。
+            throw new VectorStoreUnavailableException("向量库连接失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -160,8 +169,13 @@ public class PgVectorStore {
             args.add(new Object[]{c.category(), c.source(), c.title(), c.content(), toLiteral(e)});
         }
 
-        jdbc.execute("TRUNCATE TABLE knowledge_chunk RESTART IDENTITY");
-        jdbc.batchUpdate(INSERT, args);
+        try {
+            jdbc.execute("TRUNCATE TABLE knowledge_chunk RESTART IDENTITY");
+            jdbc.batchUpdate(INSERT, args);
+        } catch (DataAccessException e) {
+            // 同 count()/search(): 运行期宕机 → 503 语义，不毒化 available。
+            throw new VectorStoreUnavailableException("向量库连接失败: " + e.getMessage());
+        }
         log.info("向量入库完成: {} 块", args.size());
         return args.size();
     }
@@ -172,13 +186,18 @@ public class PgVectorStore {
         }
         Embedding q = embeddingModel.embed(query).content();
         String literal = toLiteral(q);
-        return jdbc.query(SEARCH, (rs, i) -> new Hit(
-                        rs.getString("category"),
-                        rs.getString("source"),
-                        rs.getString("title"),
-                        rs.getString("content"),
-                        rs.getDouble("score")),
-                literal, literal, topK);
+        try {
+            return jdbc.query(SEARCH, (rs, i) -> new Hit(
+                            rs.getString("category"),
+                            rs.getString("source"),
+                            rs.getString("title"),
+                            rs.getString("content"),
+                            rs.getDouble("score")),
+                    literal, literal, topK);
+        } catch (DataAccessException e) {
+            // 同 count(): 运行期宕机 → 503 语义；不毒化 available，Hikari 自动重连。
+            throw new VectorStoreUnavailableException("向量库连接失败: " + e.getMessage());
+        }
     }
 
     /** pgvector 的文本输入格式：{@code [0.1,0.2,...]}。走文本而不是二进制，便于日志排查。 */
