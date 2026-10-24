@@ -130,3 +130,15 @@ Spring Boot 默认的 Hikari `connectionTimeout=30s`，MySQL 宕机时 `/api/hea
 `spring.datasource.hikari.connection-timeout: 3000`；修复后实测 **3.0~3.4 秒**，
 MySQL 恢复后**不重启应用** 2 秒内自愈，start / history 均 200。
 详见 `docs/journal/D15-2026-11-05.md` 十六节。
+
+**收口后整改（2026-11-05，主人指示）**：
+
+| 项 | 结果 |
+|---|---|
+| DB 故障语义 | interview/resume 新增 `@ExceptionHandler(DataAccessException.class)`，按根因分流：连接类 → **503**、`DataIntegrityViolationException` → **409**、其余 → 500 ProblemDetail。实测 MySQL 宕机：start/history 503（3.0~3.1s），恢复 2s 自愈，业务 400 未误伤 |
+| health 语义 | 三服务统一为 `status: UP / DEGRADED`（HTTP 仍 200），细节在 `database` / `vectorStore` 字段 |
+| **Bug H** | MySQL 未就绪时 interview-service 因 `QuestionSeeder`（`ApplicationRunner`）抛异常**启动即退出**；已改为失败只 WARN、降级启动。代价：恢复后不重启不会补种种子数据 |
+| 死代码 | 删除拆分时整树复制带来的 `entity/User.java`、`mapper/UserMapper.java`（服务内 0 引用） |
+| 服务隔离实证 | 只停 MySQL：interview/resume `DEGRADED` + 端点 503，**knowledge-service 仍 `UP` 且 search 200** |
+
+详见 `docs/journal/D15-2026-11-05.md` 二十节。
