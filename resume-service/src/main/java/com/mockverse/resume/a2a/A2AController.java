@@ -26,16 +26,23 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * A2A 传输层：AgentCard 发现 + JSON-RPC 端点（D16）。
  *
- * <p><b>与 interview-service 的同名文件是同一份传输层</b>，只有包名不同。三份拷贝是
- * 有意的（服务独立可构建），代价是改一处必须同步三处，清单见
- * {@link A2AServerConfig} 的类注释。
- *
  * <p><b>职责边界</b>：本类只做"HTTP/JSON-RPC 信封 ↔ spec 对象"的翻译，业务状态机在
  * a2a SDK 的 {@link DefaultRequestHandler} 里。这样 D17 的 RemoteA2AAgent（按 A2A 规范
  * 发报文）与我们是同一套协议，而不是自造的私有接口。
  *
  * <p><b>为什么自己写而不是引官方 webservice 模块</b>：见 {@link A2AServerConfig} 的类注释——
  * ADK 1.13.0 里那个模块不存在。
+ *
+ * <p><b>与 interview-service 的同名文件是同一份传输层</b>，只有包名不同。三份拷贝是
+ * 有意的（服务独立可构建），代价是改一处必须同步三处，清单见
+ * {@link A2AServerConfig} 的类注释。
+ *
+ * <p><b>所有方法共用 AgentCard.url 一个端点</b>（D16 六查修正）：A2A 的方法名在 JSON-RPC
+ * 信封里，不在路径上。a2a SDK 的 {@code JSONRPCTransport} 实测就是这么做——{@code message/send}
+ * 与 {@code message/stream} 都 POST 到 {@code agentCard.url()}，只有 {@code method} 字段不同
+ * （前者收一次性 JSON，后者收 SSE）。D16 最初把流式放在 {@code /a2a/v1/stream} 子路径上，
+ * 那是规范外的私有约定：任何合规客户端都调不到，而卡片里又写着 {@code streaming: true}，
+ * 等于对 D17 的 RemoteA2AAgent 虚报能力。
  *
  * <p><b>序列化用 {@link Utils#OBJECT_MAPPER} 而不是 Spring 的 ObjectMapper</b>：
  * spec 记录类上的 Jackson 注解（多态 part、kind 判别器）是按 SDK 的 mapper 配置设计的，
@@ -44,6 +51,9 @@ import java.util.concurrent.atomic.AtomicReference;
 @Slf4j
 @RestController
 public class A2AController {
+
+    private static final String METHOD_SEND = "message/send";
+    private static final String METHOD_STREAM = "message/stream";
 
     private final DefaultRequestHandler requestHandler;
     private final io.a2a.spec.AgentCard agentCard;
@@ -67,17 +77,28 @@ public class A2AController {
     /**
      * JSON-RPC 主端点。
      *
-     * <p>支持 A2A 0.3.x 的四个核心方法。**流式走独立路径**（{@code /a2a/v1/stream}）：
-     * JSON-RPC 的流式响应是 SSE，和一次性响应不能共用同一个 handler。
+     * <p><b>返回类型是 {@code Object}</b>：{@code message/stream} 回 {@link SseEmitter}，
+     * 其余方法回 {@link ResponseEntity}。Spring 按返回值的**实际**类型选处理器
+     * （{@code ServletInvocableHandlerMethod.getReturnValueType} 会把声明的 Object
+     * 换成实际类），所以这里不需要拆成两个 handler——同路径的 POST 也无法按 body 里的
+     * 方法名拆分。
+     *
+     * <p>不能加 {@code produces}：SSE 响应是 {@code text/event-stream}，与 JSON 互斥。
+     * JSON 分支显式写 {@code contentType}，避免被协商成 text/plain。
      */
-    @PostMapping(value = A2AServerConfig.RPC_PATH, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> rpc(@RequestBody JsonNode body) {
+    @PostMapping(A2AServerConfig.RPC_PATH)
+    public Object rpc(@RequestBody JsonNode body) {
         JsonNode id = body.get("id");
         String method = body.path("method").asText("");
         JsonNode params = body.path("params");
+
+        if (METHOD_STREAM.equals(method)) {
+            return stream(id, params);
+        }
+
         try {
             Object result = switch (method) {
-                case "message/send" -> requestHandler.onMessageSend(
+                case METHOD_SEND -> requestHandler.onMessageSend(
                         parse(params, MessageSendParams.class), null);
                 case "tasks/get" -> requestHandler.onGetTask(
                         parse(params, TaskQueryParams.class), null);
@@ -85,33 +106,34 @@ public class A2AController {
                         parse(params, TaskIdParams.class), null);
                 default -> throw new InvalidParamsError("不支持的方法: " + method);
             };
-            return ResponseEntity.ok(okResponse(id, result));
+            return json(okResponse(id, result));
         } catch (JSONRPCError e) {
             // 协议层错误：JSON-RPC 规定用 200 + error 对象返回，不是 HTTP 5xx
-            return ResponseEntity.ok(errorResponse(id, e));
+            return json(errorResponse(id, e));
         } catch (Exception e) {
             // 细节只进日志，不回给对端：这个端点可被网络访问，异常文本会泄露内部路径/主机名
             log.error("A2A 请求处理失败: method={}", method, e);
-            return ResponseEntity.ok(errorResponse(id, new io.a2a.spec.InternalError("服务内部错误")));
+            return json(errorResponse(id, new io.a2a.spec.InternalError("服务内部错误")));
         }
     }
 
     /**
-     * 流式端点（SSE）。
+     * {@code message/stream} 的 SSE 实现。
      *
      * <p>每个事件是一行 {@code data:}，内容是完整的 JSON-RPC 响应（同 id），
-     * 与 A2A 规范的 message/stream 语义一致。超时给 3 分钟——面试一轮的 LLM 调用
-     * 实测 3~5 秒，留足余量；超时后 emitter 关闭，客户端会收到连接结束。
+     * 与 A2A 规范一致。超时给 3 分钟——面试一轮的 LLM 调用实测 3~5 秒，留足余量；
+     * 超时后 emitter 关闭，客户端会收到连接结束。
+     *
+     * <p>解析阶段的错误（-32602）也要走 SSE 回一个 error 事件再关闭：客户端的 SSE
+     * 监听器只认 {@code data:} 行，直接断开会让它拿不到原因。
      */
-    @PostMapping(value = A2AServerConfig.RPC_PATH + "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@RequestBody JsonNode body) {
-        JsonNode id = body.get("id");
+    private SseEmitter stream(JsonNode id, JsonNode params) {
         SseEmitter emitter = new SseEmitter(180_000L);
         AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
 
         try {
-            MessageSendParams params = parse(body.path("params"), MessageSendParams.class);
-            requestHandler.onMessageSendStream(params, null).subscribe(new Flow.Subscriber<>() {
+            MessageSendParams sendParams = parse(params, MessageSendParams.class);
+            requestHandler.onMessageSendStream(sendParams, null).subscribe(new Flow.Subscriber<>() {
                 @Override
                 public void onSubscribe(Flow.Subscription s) {
                     subscription.set(s);
@@ -176,6 +198,10 @@ public class A2AController {
         } catch (Exception e) {
             throw new InvalidParamsError("参数格式错误: " + e.getMessage());
         }
+    }
+
+    private static ResponseEntity<String> json(String body) {
+        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
     private static String okResponse(JsonNode id, Object result) {

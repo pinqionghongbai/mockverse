@@ -2,6 +2,7 @@ package com.mockverse.monolith.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.adk.tools.Annotations;
 import com.google.adk.tools.ToolContext;
 import com.mockverse.monolith.dto.DiagnosisResult;
 import com.mockverse.monolith.entity.ResumeDiagnosis;
@@ -17,6 +18,11 @@ import java.util.Map;
 
 /**
  * 简历诊断工具: 暴露给 resume_agent 的 {@code diagnose_resume} 函数（D12）。
+ *
+ * <p><b>模型看到的名字由 {@link Annotations.Schema#name()} 显式指定</b>: ADK 默认取 Java
+ * 方法名原样（{@code diagnoseResume}, 见 {@code FunctionCallingUtils.buildFunctionDeclaration}）,
+ * **不会**自动转下划线。本类日志里的 {@code function tool: diagnoseResume} 就是这个原样名——
+ * 提示词写的是 {@code diagnose_resume}, 两者不一致时只能靠模型自己看 schema 纠正, 不可依赖。
  *
  * <p>内部完整复用 D11 的诊断链路（json_object + 三层语义校验 + 落库）,
  * 本工具只做"结构化结果 → 可转述的 Map"这一层翻译, 不重复任何校验逻辑。
@@ -40,6 +46,9 @@ public class ResumeTools {
      * @param resumeText  简历原文，由模型从用户消息里完整传入
      * @param toolContext ADK 注入的运行时上下文（非模型参数，不进 schema）
      */
+    @Annotations.Schema(
+            name = "diagnose_resume",
+            description = "对简历原文做结构化诊断并落库，返回总分、三个维度分和逐条问题")
     public Map<String, Object> diagnoseResume(String resumeText, ToolContext toolContext) {
         Map<String, Object> result = new LinkedHashMap<>();
         try {

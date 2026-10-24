@@ -1,5 +1,6 @@
 package com.mockverse.monolith.agent;
 
+import com.google.adk.tools.Annotations;
 import com.mockverse.monolith.rag.KnowledgeService;
 import com.mockverse.monolith.rag.PgVectorStore;
 import com.mockverse.monolith.rag.VectorStoreUnavailableException;
@@ -15,8 +16,11 @@ import java.util.Map;
 /**
  * 知识库工具: 暴露给 knowledge_agent 的 {@code search_knowledge} 函数（D12）。
  *
- * <p>ADK 会把方法名 {@code searchKnowledge} 转成 {@code search_knowledge} 暴露给模型,
- * 子 Agent 提示词里必须用下划线形式引用。
+ * <p><b>模型看到的名字由 {@link Annotations.Schema#name()} 显式指定</b>: ADK 默认取 Java
+ * 方法名原样（{@code searchKnowledge}, 见 {@code FunctionCallingUtils.buildFunctionDeclaration}）,
+ * **不会**自动转下划线——D16 六查用源码与运行日志核实（resume 侧报错行写的就是
+ * {@code function tool: diagnoseResume}）。提示词与文档一直写下划线形式, 所以在这里显式对齐,
+ * 而不是让"提示词说 A、schema 说 B"靠模型自己猜。
  *
  * <p>返回"结构化命中列表"而不是拼好的提示词——组织语言是子 Agent 的模型的事
  * （temperature 0.2）,工具只负责确定性的检索。这样检索和生成解耦,
@@ -34,6 +38,9 @@ public class KnowledgeTools {
      *
      * @param query 检索词，通常是用户的问题本身
      */
+    @Annotations.Schema(
+            name = "search_knowledge",
+            description = "在 Java 后端知识库里做向量检索，返回带编号的资料片段；回答技术问题前先调用")
     public Map<String, Object> searchKnowledge(String query) {
         // 工具被真实调用的观测点: 没有这行日志，"Agent 自主检索"只是提示词的一厢情愿（D12 二查补）
         log.info("search_knowledge 工具被调用: {}", query);
