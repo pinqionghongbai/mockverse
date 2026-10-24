@@ -266,7 +266,12 @@ public class InterviewService {
                     tx.executeWithoutResult(status -> {
                         appendMessage(sessionId, "USER", null, userAnswer, null);
                         appendTurns(sessionId, new ChatResult(saved, "stream-failed"), null);
-                        appendMessage(sessionId, "AGENT", FALLBACK_AUTHOR, CAPABILITY_UNAVAILABLE, null);
+                        // 四查修复: saved 为空时 appendTurns 的空兜底已落一条降级话术,
+                        // 显式这条只在"有部分文本"时追加——否则空流失败会在库里落两条
+                        // 相同的 CAPABILITY_UNAVAILABLE
+                        if (!saved.isEmpty()) {
+                            appendMessage(sessionId, "AGENT", FALLBACK_AUTHOR, CAPABILITY_UNAVAILABLE, null);
+                        }
                         session.setTotalRounds(round);
                         if (finished) {
                             session.setStatus("COMPLETED");
