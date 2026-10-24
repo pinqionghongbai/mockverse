@@ -11,6 +11,10 @@ spring:
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 同 interview-service: 故障期快速失败(3s)，不用 Spring Boot 默认的 30s。
+      # 见 interview-service/src/main/resources/application.yml 同段注释（D15 八查实测）。
+      connection-timeout: 3000
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai

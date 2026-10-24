@@ -12,6 +12,12 @@ spring:
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # MySQL 宕机时不要每个请求阻塞 30 秒（Spring Boot 默认 connectionTimeout=30s）。
+      # D15 八查实测: 故障期 /api/health 与 /api/interview/start 各阻塞 30.1s 才返回，
+      # 而 knowledge-service 的 pgvector 池是 3s 快速失败——三服务失败速度应一致。
+      # 3s 只影响"从池里拿连接"的等待，不影响正常查询耗时。
+      connection-timeout: 3000
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
