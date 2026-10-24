@@ -56,7 +56,11 @@ curl -s -X POST "http://localhost:8081/api/resume/diagnose" \
 ```
 
 **口播**："贴一段简历，Agent 强制 JSON 输出——总分、三个维度分、问题清单逐条带
-原文引用，落库 MySQL。平庸简历给 42 分，不是恭维型的玩具。"
+原文引用，落库 MySQL。**分数按简历实际质量给，平庸简历落在及格线以下**，不是恭维型的玩具。"
+
+> ⚠️ **别念具体分数**（D15 再检查实测）：同一份"平庸简历"D11 给 52、D14 给 42、
+> D15 复测给 52——抖动 + 简历文本差异叠加，念死数字会和屏幕对不上。指着屏幕说
+> "看，分数不高，问题逐条带原文引用"即可。
 
 ### 2:10–2:50 杀进程重启，接着聊（会话恢复，压轴）
 
@@ -82,6 +86,11 @@ curl -s -X POST "http://localhost:8081/api/interview/<sessionId>/answer" \
 ## 录前准备清单
 
 ```bash
+# 0. ⚠️ 先确认三个微服务没在跑（D15 拆分后它们与单体同占 8081/8082/8083）
+netstat -ano | grep -E ":(8081|8082|8083) " | grep LISTENING
+#    有输出就先停掉，否则单体起不来（报 Port 8081 already in use）
+#    注意：单体与 interview-service 都用 8081，二者互斥
+
 # 1. 起两个库
 docker start mockverse-mysql mockverse-pg
 
@@ -89,7 +98,7 @@ docker start mockverse-mysql mockverse-pg
 cd E:/cluadeworkbase/mockverse/mockverse-monolith
 export MYSQL_PORT=3307        # 必须
 set -a; . ./dev.env; set +a
-mvn -B spring-boot:run        # 等 http://localhost:8081/api/health 返回 200
+mvn -B spring-boot:run        # 等 http://localhost:8081/api/health 返回 200（实测冷启 14s / 重启 12s）
 
 # 3. 预备 UTF-8 请求体文件（避免 curl 中文 GBK 坑，D11 教训）
 #    answer.json / knowledge.json / resume.json / answer2.json 按分镜准备好
@@ -103,7 +112,7 @@ mvn -B spring-boot:run        # 等 http://localhost:8081/api/health 返回 200
 |---|---|---|
 | 开场轮 coordinator 越权自己念题（不转移） | ~20%（3/10） | 无实害——输出幂等正确，只是归因是 root_coordinator；介意就重录一次 |
 | SSE 首字偶发慢（DeepSeek 波动） | 低 | 重试即可；实测均值 ~2s |
-| 简历诊断分数抖动 ±6 | 固有 | 42±6 都在"平庸"区间，口播别说死具体分数 |
+| 简历诊断分数抖动（D11 52 / D14 42 / D15 52） | 固有 | 口播**不念具体分数**（见分镜 1:30 的警示框），只说"不高" |
 
 ## 诚实边界（不要在视频里说的话）
 
