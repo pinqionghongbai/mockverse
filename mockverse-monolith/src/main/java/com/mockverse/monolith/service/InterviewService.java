@@ -131,7 +131,13 @@ public class InterviewService {
         boolean finished = round >= session.getMaxRounds();
 
         String adkSessionId = "iv-" + sessionId;
-        runtime.ensureSession(String.valueOf(session.getUserId()), adkSessionId);
+        // 每轮重建（D13）: chat_message 是唯一事实源, ADK session 是本轮工作缓存。
+        // 重启恢复(session 丢了)与流式污染(session 脏了)在同一条路径上被消灭
+        int restored = runtime.rebuildSession(String.valueOf(session.getUserId()), adkSessionId,
+                replayHistory(sessionId));
+        if (restored > 0) {
+            log.info("会话重建: {} 条历史消息已回放灌回 ADK (session={})", restored, adkSessionId);
+        }
 
         // 先拿模型回复再落库: 模型失败时用户消息不会半截入库，重试也不会产生重复回答
         ChatResult reply = chat(session.getUserId(), adkSessionId,
@@ -160,6 +166,112 @@ public class InterviewService {
                 .map(m -> new MessageView(m.getSeqNo(), m.getRole(), m.getAgentName(),
                         m.getContent(), m.getCreatedAt()))
                 .toList();
+    }
+
+    // ------------------------------------------------------------------
+    // SSE 流式（D13 下午）
+    // ------------------------------------------------------------------
+
+    /** 流式端点的事件载荷: chunk=增量文本, done=整轮结束, error=降级。 */
+    public sealed interface StreamEvent permits ChunkEvent, DoneEvent, ErrorEvent {}
+
+    public record ChunkEvent(String author, String delta) implements StreamEvent {}
+
+    public record DoneEvent(int round, boolean finished) implements StreamEvent {}
+
+    public record ErrorEvent(String message) implements StreamEvent {}
+
+    /**
+     * 流式回答一轮（D13 SSE）: 返回 Flowable 由 Controller 订阅转 SseEmitter。
+     *
+     * <p>校验与 {@link #answer} 一致且同步执行——400 类错误在订阅开始前就抛,
+     * HTTP 层还能走正常的 ProblemDetail 处理, 而不是流开了一半才失败。
+     *
+     * <p>落库时机在流终止后: 正常结束聚合 turns 分条落库; 失败时用户已看到部分文本,
+     * 把「USER + 已收到的部分 + 降级话术」一并落库——历史必须与用户看到的一致,
+     * 这是流式比同步多出来的一致性责任。轮数照进、状态照转, 降级不改主流程。
+     */
+    public io.reactivex.rxjava3.core.Flowable<StreamEvent> answerStream(Long sessionId, String userAnswer) {
+        if (userAnswer == null || userAnswer.isBlank()) {
+            throw new IllegalArgumentException("回答不能为空");
+        }
+        InterviewSession session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new IllegalArgumentException("会话不存在: " + sessionId);
+        }
+        if (!"IN_PROGRESS".equals(session.getStatus())) {
+            throw new IllegalStateException("会话已结束: " + session.getStatus());
+        }
+        int round = (session.getTotalRounds() == null ? 0 : session.getTotalRounds()) + 1;
+        boolean finished = round >= session.getMaxRounds();
+
+        String adkSessionId = "iv-" + sessionId;
+        String userId = String.valueOf(session.getUserId());
+        int restored = runtime.rebuildSession(userId, adkSessionId, replayHistory(sessionId));
+        if (restored > 0) {
+            log.info("会话重建: {} 条历史消息已回放灌回 ADK (session={})", restored, adkSessionId);
+        }
+
+        List<AgentRuntime.Turn> collected = new java.util.concurrent.CopyOnWriteArrayList<>();
+        StringBuilder current = new StringBuilder();
+        java.util.concurrent.atomic.AtomicReference<String> currentAuthor = new java.util.concurrent.atomic.AtomicReference<>();
+
+        return runtime.converseStream(rootRunner, userId, adkSessionId,
+                        InterviewerPrompts.answerTurn(userAnswer, finished), AGENT_TIMEOUT)
+                .map(chunk -> (StreamEvent) new ChunkEvent(chunk.author(), chunk.text()))
+                .doOnNext(evt -> {
+                    if (evt instanceof ChunkEvent c) {
+                        String prev = currentAuthor.get();
+                        if (prev != null && !prev.equals(c.author())) {
+                            collected.add(new AgentRuntime.Turn(prev, current.toString()));
+                            current.setLength(0);
+                        }
+                        currentAuthor.set(c.author());
+                        current.append(c.delta());
+                    }
+                })
+                .doOnComplete(() -> {
+                    String author = currentAuthor.get();
+                    if (author != null && !current.isEmpty()) {
+                        collected.add(new AgentRuntime.Turn(author, current.toString()));
+                    }
+                })
+                .concatWith(io.reactivex.rxjava3.core.Flowable.defer(() -> {
+                    // 流正常结束: 落库 + 发 Done
+                    tx.executeWithoutResult(status -> {
+                        appendMessage(sessionId, "USER", null, userAnswer, null);
+                        appendTurns(sessionId, new ChatResult(List.copyOf(collected), null), null);
+                        session.setTotalRounds(round);
+                        if (finished) {
+                            session.setStatus("COMPLETED");
+                            session.setEndedAt(LocalDateTime.now());
+                        }
+                        sessionMapper.updateById(session);
+                    });
+                    return io.reactivex.rxjava3.core.Flowable.just(new DoneEvent(round, finished));
+                }))
+                .onErrorResumeNext(e -> {
+                    // 流失败: 已推给用户的文本不能从历史里消失, 降级收尾后发 Error
+                    log.warn("流式链路失败, 降级收尾: {}", e.getMessage());
+                    List<AgentRuntime.Turn> saved = new java.util.ArrayList<>(collected);
+                    String partial = current.toString();
+                    if (currentAuthor.get() != null && !partial.isBlank()) {
+                        saved.add(new AgentRuntime.Turn(currentAuthor.get(), partial));
+                    }
+                    tx.executeWithoutResult(status -> {
+                        appendMessage(sessionId, "USER", null, userAnswer, null);
+                        appendTurns(sessionId, new ChatResult(saved, "stream-failed"), null);
+                        appendMessage(sessionId, "AGENT", FALLBACK_AUTHOR, CAPABILITY_UNAVAILABLE, null);
+                        session.setTotalRounds(round);
+                        if (finished) {
+                            session.setStatus("COMPLETED");
+                            session.setEndedAt(LocalDateTime.now());
+                        }
+                        sessionMapper.updateById(session);
+                    });
+                    return io.reactivex.rxjava3.core.Flowable.just(
+                            (StreamEvent) new ErrorEvent("该能力暂时不可用，面试流程不受影响，可继续作答。"));
+                });
     }
 
     // ------------------------------------------------------------------
@@ -251,5 +363,16 @@ public class InterviewService {
                         .orderByDesc(ChatMessage::getSeqNo)
                         .last("LIMIT 1"));
         return last == null ? 1 : last.getSeqNo() + 1;
+    }
+
+    /** 恢复素材: 该会话全部消息按 seq 升序投影（含 USER 与 AGENT 两类）。 */
+    private List<AgentRuntime.RestorableMessage> replayHistory(Long sessionId) {
+        return messageMapper.selectList(
+                        Wrappers.<ChatMessage>lambdaQuery()
+                                .eq(ChatMessage::getSessionId, sessionId)
+                                .orderByAsc(ChatMessage::getSeqNo))
+                .stream()
+                .map(m -> new AgentRuntime.RestorableMessage(m.getRole(), m.getAgentName(), m.getContent()))
+                .toList();
     }
 }

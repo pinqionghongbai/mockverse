@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -58,6 +59,69 @@ public class AgentRuntime {
                     .blockingGet();
         }
     }
+
+    /**
+     * 会话恢复（D13）：把 DB 里的历史消息回放灌回 ADK 会话（重启后 InMemory 会话丢失的还债）。
+     *
+     * <p>选型走"回放式"而不是自实现 DB 版 SessionService: {@code chat_message} 表本就存着
+     * 完整有序历史（seq + author 齐全），灌回 {@code appendEvent} 就能重建 LLM 上下文——
+     * 验收标准只要求"重启后上下文还在"，这是满足它的最短路径。
+     *
+     * <p><b>幂等</b>: ADK 会话已有事件（进程没重启过）就跳过，不重复灌。
+     * 判据是事件数 &gt; 0——正常会话每轮至少产生一条 user 事件。
+     *
+     * @param history 按 seq 升序的历史消息; user 消息 author 固定为 "user"，
+     *                agent 消息用落库的 agent_name（保持归因一致）
+     */
+    public int restoreSession(String userId, String adkSessionId, List<RestorableMessage> history) {
+        var session = sessionService
+                .getSession(properties.getAppName(), userId, adkSessionId, Optional.empty())
+                .blockingGet();
+        if (session == null) {
+            throw new IllegalStateException("会话尚未创建，先 ensureSession: " + adkSessionId);
+        }
+        if (!session.events().isEmpty() || history == null || history.isEmpty()) {
+            return 0;
+        }
+        for (RestorableMessage m : history) {
+            String author = "USER".equals(m.role()) ? "user" : m.agentName();
+            Content content = Content.builder()
+                    .role("USER".equals(m.role()) ? "user" : "model")
+                    .parts(List.of(Part.fromText(m.content())))
+                    .build();
+            Event event = Event.builder()
+                    .id(UUID.randomUUID().toString())
+                    .author(author)
+                    .timestamp(System.currentTimeMillis())
+                    .content(content)
+                    .build();
+            sessionService.appendEvent(session, event).blockingGet();
+        }
+        return history.size();
+    }
+
+    /**
+     * 每轮重建会话（D13 修复 session 污染后的最终形态）。
+     *
+     * <p><b>为什么每轮删了重建</b>: SSE 流式轮会把 chunk 粒度事件（含流结束时的空
+     * content 事件）append 进 session, 下一轮组装 LlmRequest 时空文本事件转 AiMessage
+     * 会抛 {@code text cannot be null or blank}（D13 实测炸过一轮）。与其逐事件甄别,
+     * 不如确立更简单的模型: <b>chat_message 是唯一事实源, ADK session 只是本轮的
+     * 工作缓存</b>——每轮开始删缓存、回放干净的 turn 级历史。重启恢复（session 丢了）
+     * 和缓存污染（session 脏了）在同一条路径上被消灭。
+     *
+     * <p>代价: 每轮一次 DB 查询 + N 次 appendEvent, 毫秒级, 面试 5 轮可忽略。
+     */
+    public int rebuildSession(String userId, String adkSessionId, List<RestorableMessage> history) {
+        sessionService.deleteSession(properties.getAppName(), userId, adkSessionId)
+                .onErrorComplete() // 不存在视为已删
+                .blockingAwait();
+        ensureSession(userId, adkSessionId);
+        return restoreSession(userId, adkSessionId, history);
+    }
+
+    /** 回放素材: chat_message 行的最小投影（避免 agent 包反向依赖 entity/mapper）。 */
+    public record RestorableMessage(String role, String agentName, String content) {}
 
     /**
      * 跑一轮对话并返回纯文本回复。
@@ -175,6 +239,53 @@ public class AgentRuntime {
 
     /** 一句话回复片段，author = 说这句话的 Agent 名。 */
     public record Turn(String author, String text) {}
+
+    /**
+     * 流式回复的增量片段（D13 SSE）：author + 一小段文字（通常几个字到一个词）。
+     *
+     * <p>与 {@link Turn} 的区别: text 是**增量**不是全量, 消费端负责拼接。
+     */
+    public record Chunk(String author, String text) {}
+
+    /**
+     * 流式跑一轮对话（D13 SSE）: 返回 Flowable 供 Controller 直接订阅,
+     * 每个含文本的事件映射为一个 {@link Chunk}——终端逐字输出的数据源。
+     *
+     * <p>与 {@link #converse} 的三点差异:
+     * <ul>
+     *   <li>{@code RunConfig.streamingMode=SSE}: LangChain4j 适配器由此切到
+     *       streamingChatModel, 模型逐段回调而非整段返回</li>
+     *   <li>非阻塞: 不用 blockingIterable, 直接把 Flowable 交给调用方订阅</li>
+     *   <li>超时语义变为"事件间超时": 流式下逐字输出, 事件间隔超时(120s 没有新片段)
+     *       即视为卡死——比整轮 deadline 更贴合流的形态</li>
+     * </ul>
+     *
+     * <p>兜底注意: 错误以 onError 抛给订阅者（订阅者负责转降级事件）;
+     * functionCall/functionResponse 事件被过滤, 不会混进文本流。
+     */
+    public io.reactivex.rxjava3.core.Flowable<Chunk> converseStream(Runner runner, String userId,
+                                                                    String adkSessionId, String userText,
+                                                                    Duration eventIntervalTimeout) {
+        Content message = Content.builder()
+                .role("user")
+                .parts(List.of(Part.fromText(userText)))
+                .build();
+
+        return runner.runAsync(userId, adkSessionId, message,
+                        RunConfig.builder().setStreamingMode(RunConfig.StreamingMode.SSE).build())
+                .timeout(eventIntervalTimeout.toMillis(), TimeUnit.MILLISECONDS)
+                .concatMapIterable(e -> {
+                    List<Chunk> out = new ArrayList<>();
+                    e.content().ifPresent(content ->
+                            content.parts().ifPresent(parts -> parts.forEach(p ->
+                                    p.text().ifPresent(t -> {
+                                        if (!t.isBlank()) {
+                                            out.add(new Chunk(e.author() == null ? "unknown" : e.author(), t));
+                                        }
+                                    }))));
+                    return out;
+                });
+    }
 
     /**
      * 一轮对话的结构化结果。
