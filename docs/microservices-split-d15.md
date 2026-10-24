@@ -122,3 +122,11 @@ health 报 DEGRADED，不毒化 `available` 以保住 Hikari 自愈）。修复�
 pg 停 → health 200 DEGRADED / search·reindex 503；pg 恢复 → 不重启应用即自愈。
 详见 `docs/journal/D15-2026-11-05.md` 十一节。
 
+
+**收工审查补充（八查，MySQL 故障路径）**：interview-service / resume-service 原先用
+Spring Boot 默认的 Hikari `connectionTimeout=30s`，MySQL 宕机时 `/api/health` 与
+`/api/interview/start` 各阻塞 **30.1 秒**才返回（与 knowledge-service pgvector 池的
+3 秒快速失败差 10 倍）。已在两个服务的 `application.yml` 加
+`spring.datasource.hikari.connection-timeout: 3000`；修复后实测 **3.0~3.4 秒**，
+MySQL 恢复后**不重启应用** 2 秒内自愈，start / history 均 200。
+详见 `docs/journal/D15-2026-11-05.md` 十六节。
