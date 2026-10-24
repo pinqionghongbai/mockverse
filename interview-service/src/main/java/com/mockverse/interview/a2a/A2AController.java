@@ -127,10 +127,14 @@ public class A2AController {
         SseEmitter emitter = new SseEmitter(180_000L);
         AtomicReference<Flow.Subscription> subscription = new AtomicReference<>();
 
-        // 客户端断开 / 超时 / 出错时主动取消上游（D16 七查补）。
-        // 不注册这三个回调的话，只有等到**下一次** emitter.send() 失败才会发现对端走了——
-        // 若模型迟迟不出第一个事件（30s 的 agentCompletionTimeout 之内），这段时间一直占着
-        // 一次模型调用在烧 token。cancel() 是幂等的，正常完成时再触发一次也无害。
+        // 客户端断开 / 超时 / 出错时取消订阅（D16 七查补，九查修正措辞）。
+        //
+        // **能做的**：不再往已断开的连接写、不再接收后续事件，订阅立即释放。
+        // **做不到的**：中断正在进行的 Agent 执行。实测（resume 诊断，2s 主动断开）：
+        // 断开 22s 后 `resume_diagnosis` 仍出现该用户的落库记录——`cancel()` 只取消
+        // 下游订阅，Agent 在 a2a SDK 的线程池里照常跑完，已发出的 LLM HTTP 请求不可撤回。
+        // 所以这条修复的价值是"不再白写死连接 + 尽快释放订阅"，**不是**"省掉这次模型调用"。
+        // 真正要省 token 得在 Agent 侧加取消检查点，属于 D17+ 的事。
         Runnable cancelUpstream = () -> {
             Flow.Subscription s = subscription.get();
             if (s != null) {
@@ -155,7 +159,7 @@ public class A2AController {
                     try {
                         emitter.send(SseEmitter.event().data(okResponse(id, event)));
                     } catch (IOException | IllegalStateException e) {
-                        // 客户端断开或 emitter 已关闭：取消上游，避免继续消耗模型调用
+                        // 客户端断开或 emitter 已关闭：取消订阅，别继续往死连接写
                         cancelUpstream.run();
                         emitter.complete();
                     }
