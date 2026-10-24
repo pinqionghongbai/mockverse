@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.StringJoiner;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * pgvector 向量库：建表、批量入库、余弦相似度检索。
@@ -85,11 +86,20 @@ public class PgVectorStore {
     private volatile boolean available;
 
     /**
-     * 上次尝试建连的时刻（毫秒）。用于惰性重连的退避：
-     * pg 长时间不可用时，若每个请求都去试连，每次都要等满 3 秒的 connectionTimeout——
-     * 那会让"快速失败"变成"每次慢 3 秒再失败"。1 秒内不重复尝试即可。
+     * 上次尝试建连的时刻（毫秒）。用于惰性重连的退避。
+     *
+     * <p><b>为什么是 5 秒</b>（D15 七查实测）：退避窗口必须**大于**单次建连耗时（3 秒的
+     * connectionTimeout），否则串行请求的间隔（≈3 秒）总会落在窗口外，每个请求都重新尝试，
+     * 实测 3 个串行请求耗时 9.5 秒。改成 5 秒后：故障期 5 秒内只有第一个请求承担 3 秒，
+     * 其余立即 503；pg 恢复后最坏等 5 秒即自愈。
      */
     private volatile long lastConnectAttemptAt;
+
+    /** 惰性重连的退避窗口，必须大于 connectionTimeout（见 lastConnectAttemptAt 注释）。 */
+    private static final long RECONNECT_BACKOFF_MILLIS = 5_000;
+
+    /** 重连互斥（非阻塞）。见 {@link #connect()} 里"为什么用 tryLock"的说明。 */
+    private final ReentrantLock connectLock = new ReentrantLock();
 
     /** 检索结果。score 越高越相关。 */
     public record Hit(String category, String source, String title, String content, double score) {}
@@ -106,57 +116,73 @@ public class PgVectorStore {
      * pg 之后起来时服务**不会自己恢复**，必须重启应用。容器编排不保证启动顺序，
      * 这是真实的可用性缺陷。所以把建连抽出来，失败后允许再试。
      *
+     * <p><b>为什么用 tryLock 而不是 synchronized</b>（D15 七查）：建连最长要 3 秒
+     * （connectionTimeout）。用 synchronized 时故障期的并发请求会**排队**——排队者拿到锁时
+     * 1 秒退避窗口早已过去，于是每个都再触发一次 3 秒尝试，N 个并发请求总耗时 O(N×3s)，
+     * 把一次依赖故障放大成雪崩。tryLock 让"已有线程在重连"时其余请求立即返回不可用
+     * （快速 503），只有第一个请求承担这 3 秒。
+     *
      * @return 建连后是否可用
      */
-    private synchronized boolean connect() {
+    private boolean connect() {
         if (available) {
             return true;
         }
-        long now = System.currentTimeMillis();
-        if (now - lastConnectAttemptAt < 1_000) {
-            return false;   // 退避窗口内不重复尝试（见 lastConnectAttemptAt 注释）
+        if (!connectLock.tryLock()) {
+            return false;   // 已有线程在重连，不排队（见方法注释）
         }
-        lastConnectAttemptAt = now;
-
-        HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl("jdbc:postgresql://%s:%d/%s".formatted(
-                properties.getHost(), properties.getPort(), properties.getDatabase()));
-        cfg.setUsername(properties.getUsername());
-        cfg.setPassword(properties.getPassword());
-        cfg.setMaximumPoolSize(4);          // 只服务检索，不需要大池
-        cfg.setPoolName("pgvector-pool");
-        cfg.setConnectionTimeout(3_000);    // 连不上就快速失败，不要卡启动
-        cfg.setInitializationFailTimeout(3_000);
-
-        HikariDataSource ds = null;
         try {
-            // HikariDataSource 构造时就会建连接，连不上会直接抛 PoolInitializationException
-            ds = new HikariDataSource(cfg);
-            JdbcTemplate jt = new JdbcTemplate(ds);
-            jt.execute("CREATE EXTENSION IF NOT EXISTS vector");
-            jt.execute(CREATE_TABLE.formatted(properties.getDimensions()));
-            jt.execute(CREATE_INDEX);
-            dataSource = ds;
-            jdbc = jt;
-            available = true;
-            log.info("pgvector 就绪: {}:{}/{} 维度={}",
-                    properties.getHost(), properties.getPort(), properties.getDatabase(),
-                    properties.getDimensions());
-            return true;
-        } catch (RuntimeException e) {
-            // 池已建好但 DDL 失败（如权限不足）时 ds 尚未赋给字段，必须在这里关掉——
-            // 否则每次重试都漏一个连接池，故障期会累积。
-            if (ds != null) {
-                try {
-                    ds.close();
-                } catch (RuntimeException ignored) {
-                    // 关闭失败不掩盖原始异常
-                }
+            if (available) {
+                return true;    // 双检：等锁期间别的线程可能已连上
             }
-            available = false;
-            log.warn("pgvector 不可用，知识库相关接口将返回错误: {}。"
-                    + "启动方式见 STATUS.md（docker start mockverse-pg）", e.getMessage());
-            return false;
+            long now = System.currentTimeMillis();
+            if (now - lastConnectAttemptAt < RECONNECT_BACKOFF_MILLIS) {
+                return false;   // 退避窗口内不重复尝试（见 lastConnectAttemptAt 注释）
+            }
+            lastConnectAttemptAt = now;
+
+            HikariConfig cfg = new HikariConfig();
+            cfg.setJdbcUrl("jdbc:postgresql://%s:%d/%s".formatted(
+                    properties.getHost(), properties.getPort(), properties.getDatabase()));
+            cfg.setUsername(properties.getUsername());
+            cfg.setPassword(properties.getPassword());
+            cfg.setMaximumPoolSize(4);          // 只服务检索，不需要大池
+            cfg.setPoolName("pgvector-pool");
+            cfg.setConnectionTimeout(3_000);    // 连不上就快速失败，不要卡启动
+            cfg.setInitializationFailTimeout(3_000);
+
+            HikariDataSource ds = null;
+            try {
+                // HikariDataSource 构造时就会建连接，连不上会直接抛 PoolInitializationException
+                ds = new HikariDataSource(cfg);
+                JdbcTemplate jt = new JdbcTemplate(ds);
+                jt.execute("CREATE EXTENSION IF NOT EXISTS vector");
+                jt.execute(CREATE_TABLE.formatted(properties.getDimensions()));
+                jt.execute(CREATE_INDEX);
+                dataSource = ds;
+                jdbc = jt;
+                available = true;
+                log.info("pgvector 就绪: {}:{}/{} 维度={}",
+                        properties.getHost(), properties.getPort(), properties.getDatabase(),
+                        properties.getDimensions());
+                return true;
+            } catch (RuntimeException e) {
+                // 池已建好但 DDL 失败（如权限不足）时 ds 尚未赋给字段，必须在这里关掉——
+                // 否则每次重试都漏一个连接池，故障期会累积。
+                if (ds != null) {
+                    try {
+                        ds.close();
+                    } catch (RuntimeException ignored) {
+                        // 关闭失败不掩盖原始异常
+                    }
+                }
+                available = false;
+                log.warn("pgvector 不可用，知识库相关接口将返回错误: {}。"
+                        + "启动方式见 STATUS.md（docker start mockverse-pg）", e.getMessage());
+                return false;
+            }
+        } finally {
+            connectLock.unlock();
         }
     }
 
