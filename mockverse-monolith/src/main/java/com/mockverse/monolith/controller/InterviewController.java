@@ -77,11 +77,17 @@ public class InterviewController {
                 },
                 error -> {
                     // 订阅前抛出的校验异常已由 answerStream 同步处理, 走到这里的是订阅期意外
+                    // (如 defer 落库阶段 DB 失败)。三查修复: catch 放宽为 Exception——
+                    // emitter 已被 180s 超时 complete 时 send 抛 IllegalStateException,
+                    // 从 onError 消费者向外传播会被 RxJavaPlugins 抛到调度线程(ADK 线程池
+                    // 有被打死的风险)。与二查 Bug B 同族, 二查只修了 onNext 漏了这里。
                     try {
                         emitter.send(SseEmitter.event().data(
                                 new InterviewService.ErrorEvent("链路异常: " + error.getMessage())));
-                    } catch (IOException ignored) {
-                        // 断开就断开
+                    } catch (Exception e) {
+                        // emitter 已关闭(超时/完成), 发不出去就算了
+                        log.warn("SSE 错误事件发送失败(emitter 已关闭?): session={}, {}",
+                                sessionId, e.getMessage());
                     } finally {
                         emitter.complete();
                     }
