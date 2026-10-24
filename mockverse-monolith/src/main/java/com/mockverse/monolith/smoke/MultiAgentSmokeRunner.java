@@ -57,7 +57,13 @@ public class MultiAgentSmokeRunner implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         System.out.println("\n========== D12 多 Agent 编排冒烟开始 ==========");
-        knowledgeService.ensureIndexed();
+        // 入库失败不终止冒烟: pg 缺席时场景 1 的知识问题会自然走到工具层 catch 路径，
+        // 恰好覆盖"工具层故障降级"这个 D12 想测的形态（二查补）
+        try {
+            knowledgeService.ensureIndexed();
+        } catch (Exception e) {
+            System.out.println("[warn] 知识库不可用，场景 1 的知识问题将走工具层降级路径: " + e.getMessage());
+        }
 
         int passed = 0;
         int failed = 0;

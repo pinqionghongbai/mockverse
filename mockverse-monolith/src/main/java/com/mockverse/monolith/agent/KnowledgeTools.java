@@ -35,6 +35,8 @@ public class KnowledgeTools {
      * @param query 检索词，通常是用户的问题本身
      */
     public Map<String, Object> searchKnowledge(String query) {
+        // 工具被真实调用的观测点: 没有这行日志，"Agent 自主检索"只是提示词的一厢情愿（D12 二查补）
+        log.info("search_knowledge 工具被调用: {}", query);
         Map<String, Object> result = new LinkedHashMap<>();
         try {
             List<PgVectorStore.Hit> hits = knowledgeService.search(query);

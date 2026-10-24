@@ -49,6 +49,12 @@ public class KnowledgeService {
         if (query == null || query.isBlank()) {
             throw new IllegalArgumentException("查询不能为空");
         }
+        // 必须先判 available 再判 count: pg 停机时 count() 安静地返回 0，
+        // 只看 count 会把"库挂了"误报成"库是空的"，用户按提示去入库，入库同样失败——
+        // 错误消息把排查方向带偏（D12 收工二查抓出）
+        if (!store.isAvailable()) {
+            throw new VectorStoreUnavailableException("向量库不可用（pgvector 未启动或连接失败），见 STATUS.md 启动方式");
+        }
         if (store.count() == 0) {
             throw new VectorStoreUnavailableException("向量库为空，请先执行入库");
         }
