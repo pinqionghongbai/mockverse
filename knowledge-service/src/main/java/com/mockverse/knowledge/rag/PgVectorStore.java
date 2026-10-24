@@ -84,11 +84,40 @@ public class PgVectorStore {
      */
     private volatile boolean available;
 
+    /**
+     * 上次尝试建连的时刻（毫秒）。用于惰性重连的退避：
+     * pg 长时间不可用时，若每个请求都去试连，每次都要等满 3 秒的 connectionTimeout——
+     * 那会让"快速失败"变成"每次慢 3 秒再失败"。1 秒内不重复尝试即可。
+     */
+    private volatile long lastConnectAttemptAt;
+
     /** 检索结果。score 越高越相关。 */
     public record Hit(String category, String source, String title, String content, double score) {}
 
     @PostConstruct
     void init() {
+        connect();
+    }
+
+    /**
+     * 建连 + 建表（幂等）。启动时调用一次；之后 pg 恢复时由 {@link #ensureAvailable()} 惰性重试。
+     *
+     * <p><b>为什么可重入</b>：D15 六查实测——冷启动时 pg 没起（available=false），
+     * pg 之后起来时服务**不会自己恢复**，必须重启应用。容器编排不保证启动顺序，
+     * 这是真实的可用性缺陷。所以把建连抽出来，失败后允许再试。
+     *
+     * @return 建连后是否可用
+     */
+    private synchronized boolean connect() {
+        if (available) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastConnectAttemptAt < 1_000) {
+            return false;   // 退避窗口内不重复尝试（见 lastConnectAttemptAt 注释）
+        }
+        lastConnectAttemptAt = now;
+
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl("jdbc:postgresql://%s:%d/%s".formatted(
                 properties.getHost(), properties.getPort(), properties.getDatabase()));
@@ -99,22 +128,45 @@ public class PgVectorStore {
         cfg.setConnectionTimeout(3_000);    // 连不上就快速失败，不要卡启动
         cfg.setInitializationFailTimeout(3_000);
 
+        HikariDataSource ds = null;
         try {
             // HikariDataSource 构造时就会建连接，连不上会直接抛 PoolInitializationException
-            dataSource = new HikariDataSource(cfg);
-            jdbc = new JdbcTemplate(dataSource);
-            jdbc.execute("CREATE EXTENSION IF NOT EXISTS vector");
-            jdbc.execute(CREATE_TABLE.formatted(properties.getDimensions()));
-            jdbc.execute(CREATE_INDEX);
+            ds = new HikariDataSource(cfg);
+            JdbcTemplate jt = new JdbcTemplate(ds);
+            jt.execute("CREATE EXTENSION IF NOT EXISTS vector");
+            jt.execute(CREATE_TABLE.formatted(properties.getDimensions()));
+            jt.execute(CREATE_INDEX);
+            dataSource = ds;
+            jdbc = jt;
             available = true;
-            log.info("pgvector 就绪: {}:{}/{} 维度={} 现有块数={}",
+            log.info("pgvector 就绪: {}:{}/{} 维度={}",
                     properties.getHost(), properties.getPort(), properties.getDatabase(),
-                    properties.getDimensions(), count());
+                    properties.getDimensions());
+            return true;
         } catch (RuntimeException e) {
+            // 池已建好但 DDL 失败（如权限不足）时 ds 尚未赋给字段，必须在这里关掉——
+            // 否则每次重试都漏一个连接池，故障期会累积。
+            if (ds != null) {
+                try {
+                    ds.close();
+                } catch (RuntimeException ignored) {
+                    // 关闭失败不掩盖原始异常
+                }
+            }
             available = false;
             log.warn("pgvector 不可用，知识库相关接口将返回错误: {}。"
                     + "启动方式见 STATUS.md（docker start mockverse-pg）", e.getMessage());
+            return false;
         }
+    }
+
+    /**
+     * 惰性可用性检查：不可用时尝试重连一次（带退避）。
+     *
+     * <p>正常路径是 volatile 读短路，不碰锁；只有故障期才会进入 {@link #connect()}。
+     */
+    private boolean ensureAvailable() {
+        return available || connect();
     }
 
     @PreDestroy
@@ -124,12 +176,18 @@ public class PgVectorStore {
         }
     }
 
+    /**
+     * 当前是否可用（**会触发惰性重连**）。
+     *
+     * <p>health 端点靠它探活：若只读标志位，pg 恢复后 health 会一直显示 DEGRADED，
+     * 直到有人调用检索接口——运维看不到"已经好了"。所以这里委托给 ensureAvailable()。
+     */
     public boolean isAvailable() {
-        return available;
+        return ensureAvailable();
     }
 
     public int count() {
-        if (!available) {
+        if (!ensureAvailable()) {
             return 0;
         }
         try {
@@ -152,7 +210,7 @@ public class PgVectorStore {
      * 一张空表，而且没有事务保护（这里是两条独立语句，不是同一个事务）。
      */
     public int replaceAll(List<KnowledgeChunk> chunks) {
-        if (!available) {
+        if (!ensureAvailable()) {
             throw new VectorStoreUnavailableException("向量库不可用，无法入库");
         }
         if (chunks.isEmpty()) {
@@ -181,7 +239,7 @@ public class PgVectorStore {
     }
 
     public List<Hit> search(String query, int topK) {
-        if (!available) {
+        if (!ensureAvailable()) {
             throw new VectorStoreUnavailableException("向量库不可用，无法检索");
         }
         Embedding q = embeddingModel.embed(query).content();
