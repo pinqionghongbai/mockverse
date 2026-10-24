@@ -56,6 +56,26 @@
             <artifactId>google-adk-langchain4j</artifactId>
             <version>${adk.version}</version>
         </dependency>
+        <!--
+          D16: A2A 服务端。google-adk-a2a 提供 com.google.adk.a2a.executor.AgentExecutor
+          (把 ADK Runner 适配成 a2a SDK 的 AgentExecutor); 传输层与 JSON-RPC 处理器
+          在 a2a-java-sdk-server-common 里。两者版本必须配套, 见父 POM 的 a2a-sdk.version 注释。
+        -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-a2a</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-server-common</artifactId>
+            <version>${a2a-sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-spec</artifactId>
+            <version>${a2a-sdk.version}</version>
+        </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>

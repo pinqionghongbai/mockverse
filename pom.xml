@@ -44,6 +44,12 @@
         <langchain4j.version>1.12.2</langchain4j.version>
         <!-- D10: 本地 ONNX embedding 模块走 beta 线, 与 core 1.12.2 对齐 -->
         <langchain4j.embeddings.version>1.12.2-beta22</langchain4j.embeddings.version>
+        <!--
+          D16: ADK 的 A2A 集成层 (google-adk-a2a) 依赖官方 a2a-java SDK 0.3.2.Final。
+          版本取自 adk-java 1.13.0 的 a2a/pom.xml (a2a.sdk.version), 不是我们挑的 ——
+          换成 1.x 线会与 ADK 的 io.a2a.* 包名不兼容 (见 docs/a2a-comparison-d6.md)。
+        -->
+        <a2a-sdk.version>0.3.2.Final</a2a-sdk.version>
     </properties>
 
     <build>

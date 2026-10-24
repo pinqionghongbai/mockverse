@@ -6,8 +6,8 @@ import com.google.adk.tools.ToolContext;
 import com.mockverse.resume.dto.DiagnosisResult;
 import com.mockverse.resume.entity.ResumeDiagnosis;
 import com.mockverse.resume.service.ResumeDiagnosisService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -28,11 +28,20 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ResumeTools {
 
+    /** ADK 的 AgentExecutor 把 A2A 请求的 params.metadata 原样放进 RunConfig.customMetadata 的这个键。 */
+    private static final String A2A_METADATA_KEY = "a2a_metadata";
+
     private final ResumeDiagnosisService diagnosisService;
+    private final long a2aDefaultUserId;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public ResumeTools(ResumeDiagnosisService diagnosisService,
+                       @Value("${mockverse.resume.a2a-default-user-id:0}") long a2aDefaultUserId) {
+        this.diagnosisService = diagnosisService;
+        this.a2aDefaultUserId = a2aDefaultUserId;
+    }
 
     /**
      * 诊断一份简历并落库。
@@ -102,12 +111,53 @@ public class ResumeTools {
         }
     }
 
-    private static Long resolveUserId(ToolContext toolContext) {
+    /**
+     * 解析诊断记录归属的用户。
+     *
+     * <p>两条来源，优先级从高到低：
+     * <ol>
+     *   <li><b>A2A 调用方显式传的</b> {@code params.metadata.userId}——ADK 的 AgentExecutor
+     *       会把它塞进 {@code RunConfig.customMetadata} 的 {@code a2a_metadata} 键。
+     *       D17 的 RemoteA2AAgent 代用户调用本服务时必须带它，否则诊断记录没法归档到正确用户名下。</li>
+     *   <li><b>ADK 的 session userId 本身是数字</b>——进程内调用（单体/D12 时代）就是这种形态。</li>
+     * </ol>
+     *
+     * <p><b>兜底用 {@code a2aDefaultUserId}（默认 0 = 匿名）</b>：ADK 的 A2A 适配层会把 userId
+     * 强制变成 {@code A2A_USER_<contextId>}（见 AgentExecutor.getUserId），永远不是数字。
+     * 直接抛异常会让"不带 metadata 的 A2A 调用"整条链路失败（D16 实测：模型只能回一句
+     * "诊断没跑起来"）；落到 0 至少能落库，并在日志里留下是谁没带。
+     */
+    private Long resolveUserId(ToolContext toolContext) {
+        Long fromMetadata = userIdFromA2aMetadata(toolContext);
+        if (fromMetadata != null) {
+            return fromMetadata;
+        }
         String userId = toolContext.userId();
         try {
             return Long.valueOf(userId);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("会话 userId 不是合法数字: " + userId);
+            log.warn("A2A 调用未提供 metadata.userId，诊断记录归档到默认用户 {}（会话 userId={}）",
+                    a2aDefaultUserId, userId);
+            return a2aDefaultUserId;
+        }
+    }
+
+    /** 从 A2A 请求元数据里取调用方声明的 userId；没有/格式不对都返回 null（交给下一级兜底）。 */
+    private static Long userIdFromA2aMetadata(ToolContext toolContext) {
+        Object metadata = toolContext.invocationContext().runConfig()
+                .customMetadata().get(A2A_METADATA_KEY);
+        if (!(metadata instanceof Map<?, ?> map)) {
+            return null;
+        }
+        Object raw = map.get("userId");
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(String.valueOf(raw));
+        } catch (NumberFormatException e) {
+            log.warn("A2A metadata.userId 不是合法数字: {}", raw);
+            return null;
         }
     }
 }

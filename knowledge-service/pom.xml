@@ -47,6 +47,38 @@
             <version>${langchain4j.version}</version>
         </dependency>
 
+        <!--
+          D16: 把知识库包成 A2A Agent。
+          google-adk 提供 Agent 编排, google-adk-langchain4j 把本服务已有的 0.2 低温
+          ChatModel 适配成 ADK 的 Model 接口; A2A 传输层与 interview-service 同一套
+          (google-adk-a2a + a2a-java-sdk), 版本由父 POM 集中锁定。
+        -->
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-langchain4j</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.adk</groupId>
+            <artifactId>google-adk-a2a</artifactId>
+            <version>${adk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-server-common</artifactId>
+            <version>${a2a-sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a2asdk</groupId>
+            <artifactId>a2a-java-sdk-spec</artifactId>
+            <version>${a2a-sdk.version}</version>
+        </dependency>
+
         <!-- D10: 本地 ONNX embedding (bge-small-zh-v1.5, 512 维)。
              不依赖任何外部 embedding 服务与 API Key。 -->
         <dependency>
