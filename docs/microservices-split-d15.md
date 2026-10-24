@@ -115,3 +115,10 @@ D17 用 RemoteA2AAgent 接回——这是"哪怕功能还没解耦"的诚实含�
    详见 `docs/journal/D15-2026-11-05.md` 五节。
 3. **三服务未并行启动过**：验收按方案逐个起、逐个停，不做并发压测（D15 范围外）。
 
+**收工审查补充（三查，错误路径）**：knowledge-service 的 health 最初在运行期
+pgvector 宕机时返回 500（`available` 只在启动时置位），与注释契约"200 + DEGRADED"
+矛盾；检索/reindex 也是 500 而非 503。已修（`DataAccessException` → 503 语义，
+health 报 DEGRADED，不毒化 `available` 以保住 Hikari 自愈）。修复后实测：
+pg 停 → health 200 DEGRADED / search·reindex 503；pg 恢复 → 不重启应用即自愈。
+详见 `docs/journal/D15-2026-11-05.md` 十一节。
+
