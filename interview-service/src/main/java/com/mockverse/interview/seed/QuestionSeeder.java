@@ -10,6 +10,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 题库种子数据（D9 的 10 道硬编码题）。
@@ -27,19 +28,29 @@ import org.springframework.stereotype.Component;
 public class QuestionSeeder implements ApplicationRunner {
 
     private final QuestionMapper questionMapper;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
     public void run(ApplicationArguments args) {
         try {
-            seedIfEmpty();
+            // 必须包事务：10 条 seed 是逐条 insert，中途失败会留下"半套题库"，
+            // 而下次启动的 selectCount > 0 判断会认为"已有数据"直接跳过 → 题库永久残缺且无告警。
+            // 注意不能直接给 seedIfEmpty() 加 @Transactional——同类内部调用不走代理，注解会失效
+            // （巧合的是本类第 10 道种子题讲的正是这个知识点）。
+            transactionTemplate.executeWithoutResult(status -> seedIfEmpty());
         } catch (RuntimeException e) {
-            // D15 收口后整改（十查补测发现）：MySQL 未就绪时**不能让整个进程退出**。
+            // D15 收口后整改发现（Bug H）：MySQL 未就绪时**不能让整个进程退出**。
             // 此前 selectCount 直接抛出 → SpringApplication "Application run failed" → 进程退出，
             // 而 resume-service 在同样条件下能降级启动，两者可用性口径不一致。
             // 微服务由编排器拉起，启动顺序不保证（knowledge-service 对 pgvector 早就是降级语义）。
             // 代价：MySQL 恢复后不会自动补种，需重启本服务；期间题库为空时 start 返回 409。
-            log.warn("题库初始化失败，服务以降级状态启动（health 报 DEGRADED）: {}。"
-                    + "MySQL 恢复后需重启本服务才会补种种子数据", e.getMessage());
+            Throwable root = e;
+            while (root.getCause() != null && root.getCause() != root) {
+                root = root.getCause();
+            }
+            log.warn("题库初始化失败，服务以降级状态启动（health 报 DEGRADED）: {}: {}。"
+                    + "MySQL 恢复后需重启本服务才会补种种子数据",
+                    root.getClass().getSimpleName(), root.getMessage());
         }
     }
 

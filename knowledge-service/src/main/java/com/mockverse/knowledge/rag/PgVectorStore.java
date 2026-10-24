@@ -234,6 +234,13 @@ public class PgVectorStore {
      *
      * <p>顺序很重要：**先把所有向量算完，再动数据库**。反过来的话，embedding 中途失败会留下
      * 一张空表，而且没有事务保护（这里是两条独立语句，不是同一个事务）。
+     *
+     * <p><b>已知局限（D15 收口后复查，挂 STATUS）</b>：TRUNCATE 与 batchUpdate 之间没有事务，
+     * 若 TRUNCATE 成功后 pg 立刻宕机，表会**空着**，此时 search 返回空列表而不是报错——
+     * 调用方无法区分"库里没内容"和"知识库坏了"。窗口只有 batchUpdate 的几十毫秒，概率低且
+     * reindex 可重试。不在此处补事务的原因：本服务刻意不注册 Spring 的 DataSource bean
+     * （见类注释），拿不到 PlatformTransactionManager；手写 JDBC 事务要绕过 JdbcTemplate
+     * 的连接管理，收益与复杂度不成比例。真要修应在 D21 引入统一事务基础设施时做。
      */
     public int replaceAll(List<KnowledgeChunk> chunks) {
         if (!ensureAvailable()) {

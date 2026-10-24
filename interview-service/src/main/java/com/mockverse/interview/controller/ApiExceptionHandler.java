@@ -62,13 +62,7 @@ public class ApiExceptionHandler {
                 "数据访问失败: " + e.getClass().getSimpleName());
     }
 
-    /**
-     * 沿 cause 链找连接类异常。
-     *
-     * <p>用 JDK 自带的类型判定，不 import 驱动/Hikari 的异常类——那会把错误处理
-     * 和具体连接池实现绑死（knowledge-service 用 Hikari 直连 pg，这里用的是
-     * Spring 自动配置的池，两者实现可以换）。
-     */
+    /** 取最内层 cause：MyBatis 的包装异常 message 常为 null，直接打外层没有信息量。 */
     private static Throwable rootCause(Throwable e) {
         Throwable t = e;
         while (t.getCause() != null && t.getCause() != t) {
@@ -77,6 +71,13 @@ public class ApiExceptionHandler {
         return t;
     }
 
+    /**
+     * 沿 cause 链找连接类异常。
+     *
+     * <p>用 JDK 自带的类型判定，不 import 驱动/Hikari 的异常类——那会把错误处理
+     * 和具体连接池实现绑死（knowledge-service 用 Hikari 直连 pg，这里用的是
+     * Spring 自动配置的池，两者实现可以换）。
+     */
     private static boolean isConnectivityFailure(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             if (t instanceof java.net.ConnectException
