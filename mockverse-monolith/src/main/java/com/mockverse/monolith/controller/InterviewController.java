@@ -64,8 +64,15 @@ public class InterviewController {
                     try {
                         emitter.send(SseEmitter.event().data(evt));
                     } catch (IOException e) {
-                        // 客户端断开: 取消订阅即可, 服务端落库已在流的 defer/onError 钩子里安排
+                        // 客户端断开: 不取消订阅, 让流走完, defer 里的落库照常执行
                         log.warn("SSE 客户端断开: session={}, {}", sessionId, e.getMessage());
+                    } catch (Exception e) {
+                        // 二查修复: emitter 在 complete/timeout(180s 整轮上限)后再 send 抛的是
+                        // IllegalStateException。若放它传播, RxJava 会 dispose 上游,
+                        // concatWith(defer) 里的落库永不执行——用户消息+轮数凭空丢失,
+                        // 恰好违反"历史必须与用户所见一致"。吞掉发送失败, 落库不受影响。
+                        log.warn("SSE 发送失败(emitter 已关闭?), 落库不受影响: session={}, {}",
+                                sessionId, e.getMessage());
                     }
                 },
                 error -> {

@@ -235,6 +235,11 @@ public class InterviewService {
                     if (author != null && !current.isEmpty()) {
                         collected.add(new AgentRuntime.Turn(author, current.toString()));
                     }
+                    // 二查修复: 收尾后清空聚合状态。否则 defer 落库失败转进 onError 时,
+                    // saved = collected + partial 会把最后一个 turn 重复计入(瞬时 DB 故障
+                    // 恢复后真会落库两条相同消息)
+                    current.setLength(0);
+                    currentAuthor.set(null);
                 })
                 .concatWith(io.reactivex.rxjava3.core.Flowable.defer(() -> {
                     // 流正常结束: 落库 + 发 Done
