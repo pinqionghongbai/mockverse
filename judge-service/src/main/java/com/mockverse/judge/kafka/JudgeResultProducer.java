@@ -6,7 +6,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 把判题结果发到 {@code judge-result}（D20）。
@@ -30,7 +33,15 @@ public class JudgeResultProducer {
     @Value("${mockverse.judge.kafka.result-topic:judge-result}")
     private String resultTopic;
 
-    public void send(JudgeResultMessage message) {
+    /**
+     * 发送判题结果。
+     *
+     * <p><b>返回 Future 而不是 void</b>（D20 五查）：{@code KafkaTemplate.send()} 是异步的，
+     * 返回 void 就等于把"broker 收到之后才失败"（重试耗尽 / 分区不可用）当成成功——
+     * 消费者已经 ack，结果却丢了，提交永远停在 PENDING。
+     * 调用方（{@link JudgeRequestConsumer}）必须等这个 Future 完成才 ack。
+     */
+    public CompletableFuture<SendResult<String, String>> send(JudgeResultMessage message) {
         String payload;
         try {
             payload = objectMapper.writeValueAsString(message);
@@ -40,7 +51,9 @@ public class JudgeResultProducer {
             // 抛异常，不吞掉。
             throw new IllegalStateException("判题结果序列化失败: " + e.getOriginalMessage(), e);
         }
-        kafkaTemplate.send(resultTopic, message.submissionId(), payload);
-        log.info("judge-result 已发送: submissionId={}, topic={}", message.submissionId(), resultTopic);
+        CompletableFuture<SendResult<String, String>> future =
+                kafkaTemplate.send(resultTopic, message.submissionId(), payload);
+        log.info("judge-result 已入队: submissionId={}, topic={}", message.submissionId(), resultTopic);
+        return future;
     }
 }

@@ -15,6 +15,10 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # 与 interview-service 同口径：broker 不可达时 send() 阻塞 max.block.ms（默认 60s）
+        # 再抛。消费者线程被它堵住 60s 会让整个分区停摆，压到 2s 快速失败。
+        max.block.ms: ${KAFKA_MAX_BLOCK_MS:2000}
     listener:
       # 手动 ack：判题成功才提交位点，见 JudgeRequestConsumer 的幂等说明
       ack-mode: manual

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 消费 {@code judge-request}，调 {@link JavaJudge}，把结果发回 {@code judge-result}（D20）。
@@ -39,6 +40,9 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 @ConditionalOnProperty(name = "mockverse.judge.kafka.enabled", havingValue = "true", matchIfMissing = true)
 public class JudgeRequestConsumer {
+
+    /** 等结果写进分区的最长时间。判题本身有上限（编译 20s + 运行 10s），发送不该比它还慢。 */
+    private static final long SEND_TIMEOUT_SECONDS = 10L;
 
     private final JavaJudge judge;
     private final JudgeResultProducer producer;
@@ -74,13 +78,16 @@ public class JudgeRequestConsumer {
                     submissionId, result.className(), result.compiled(), result.ran(),
                     result.timedOut(), result.exitCode(), result.outputMatched(),
                     result.durationMs(), System.currentTimeMillis() - start);
-            producer.send(new JudgeResultMessage(submissionId, result));
+            // 等结果真正写进分区再 ack（五查修正）：send() 是异步的，不等就等于
+            // "判完了、结果没发出去、消息已经 ack"——提交方永远收不到结果
+            producer.send(new JudgeResultMessage(submissionId, result))
+                    .get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             ack.acknowledge();
-        } catch (RuntimeException e) {
-            // 环境级失败：允许重投后重判（见类注释）
+        } catch (Exception e) {
+            // 判题或发结果失败：允许重投后重判（见类注释）
             processed.remove(submissionId);
-            log.error("judge-request 判题失败，不 ack（将重投）: submissionId={}", submissionId, e);
-            throw e;
+            log.error("judge-request 处理失败，不 ack（将重投）: submissionId={}", submissionId, e);
+            throw new IllegalStateException("判题处理失败: submissionId=" + submissionId, e);
         }
     }
 
