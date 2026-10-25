@@ -12,11 +12,19 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.HashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 /**
- * 题库种子数据（D9 的 10 道硬编码题）。
+ * 题库种子数据（D9 的 10 道八股题 + D19 的 3 道算法题）。
  *
- * <p>幂等: 只在 question 表为空时插入，重启不会重复灌数据。
- * D10 之后题库会扩充，届时这里保留为"最小可运行数据集"。
+ * <p>幂等: 按**题干**去重，缺哪道补哪道；重启不会重复灌数据，老库也能补上新题
+ * （D19 加 ALGORITHM 题时必须这样，否则"表非空就跳过"会让新题永远进不去）。
+ *
+ * <p>D19 的三道 ALGORITHM 题带「输入样例 / 输出样例」，是判题闭环的题源——
+ * 提示词只允许模型在题目原文给出标准输出时才传 {@code expectedOutput}，
+ * 题干里不写样例，{@code judge_code} 就只能拿到 stdout、判不了对错。
  *
  * <p><b>必须最先执行</b>: 其它 {@code ApplicationRunner}（面试冒烟）依赖题库非空，
  * 不加 {@code @Order} 时执行顺序不确定，实测会出现"种子还没跑、冒烟先查库"的失败。
@@ -33,11 +41,11 @@ public class QuestionSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
-            // 必须包事务：10 条 seed 是逐条 insert，中途失败会留下"半套题库"，
-            // 而下次启动的 selectCount > 0 判断会认为"已有数据"直接跳过 → 题库永久残缺且无告警。
-            // 注意不能直接给 seedIfEmpty() 加 @Transactional——同类内部调用不走代理，注解会失效
+            // 必须包事务：13 条 seed 是逐条 insert，中途失败会留下"半套题库"，
+            // 而下次启动的去重判断会认为"已有数据"直接跳过 → 题库永久残缺且无告警。
+            // 注意不能直接给 seedMissing() 加 @Transactional——同类内部调用不走代理，注解会失效
             // （巧合的是本类第 10 道种子题讲的正是这个知识点）。
-            transactionTemplate.executeWithoutResult(status -> seedIfEmpty());
+            transactionTemplate.executeWithoutResult(status -> seedMissing());
         } catch (RuntimeException e) {
             // D15 收口后整改发现（Bug H）：MySQL 未就绪时**不能让整个进程退出**。
             // 此前 selectCount 直接抛出 → SpringApplication "Application run failed" → 进程退出，
@@ -54,14 +62,39 @@ public class QuestionSeeder implements ApplicationRunner {
         }
     }
 
-    /** 幂等灌库。与 {@link #run} 分开，是为了让启动失败可被降级而不是打死进程。 */
-    private void seedIfEmpty() {
-        Long existing = questionMapper.selectCount(Wrappers.<Question>lambdaQuery());
-        if (existing != null && existing > 0) {
-            log.info("题库已有 {} 道题，跳过种子数据", existing);
-            return;
-        }
+    /**
+     * 幂等灌库：**按题干去重**，缺哪道补哪道。
+     *
+     * <p><b>为什么从"表空才灌"改成"缺哪道补哪道"</b>（D19）：D9 时题库一次性灌 10 道，
+     * "表非空就整体跳过"够用。D19 要加 ALGORITHM 题做判题闭环，而生产库里已有 10 行——
+     * 老逻辑会直接跳过，新题永远进不去，判题闭环连题都抽不到。按题干去重后，
+     * 老库补 3 道、新库灌 13 道，同一个方法覆盖两种状态，也不需要手工 SQL。
+     *
+     * <p>去重键选**题干**而不是新增唯一索引：题干是 VARCHAR(1000)，加唯一索引会超键长；
+     * 而种子数据的题干是常量，改题干本就应该视为"新题"。代价是一次全表 select 的 content，
+     * 启动期 13 行，可忽略。
+     */
+    private void seedMissing() {
+        // 只在启动期执行一次（ApplicationRunner），单线程；用字段是为了让 13 处 seed(...)
+        // 调用点保持一行一道题的写法，不必每处多传一个集合参数
+        existingContents = questionMapper.selectList(
+                        Wrappers.<Question>lambdaQuery().select(Question::getContent))
+                .stream()
+                .map(Question::getContent)
+                .collect(Collectors.toCollection(HashSet::new));
+        int before = existingContents.size();
 
+        seedAll();
+
+        log.info("题库种子数据: 已有 {} 道，本次新增 {} 道，合计 {} 道",
+                before, seededCount, existingContents.size());
+    }
+
+    /** 启动期一次性状态（见 {@link #seedMissing()} 的说明）。 */
+    private Set<String> existingContents = Set.of();
+    private int seededCount = 0;
+
+    private void seedAll() {
         seed("JAVA_BASIC", "MEDIUM",
                 "HashMap 的扩容机制是怎样的？为什么负载因子默认是 0.75？",
                 "JDK8 中 HashMap 默认容量 16、负载因子 0.75，元素数超过 容量×0.75 时扩容为原来的 2 倍。"
@@ -137,10 +170,45 @@ public class QuestionSeeder implements ApplicationRunner {
                         + "面试常问：AOP 代理是在 postProcessAfterInitialization 阶段织入的，所以 @Transactional 在同类内部调用会失效。",
                 "Spring,Bean生命周期,AOP");
 
-        log.info("题库种子数据导入完成: 10 道题");
+        // ---- ALGORITHM（D19）：判题闭环的题源 ----
+        // 这三道题是**唯一带「输入样例 / 输出样例」的题**：提示词只允许模型在题目原文
+        // 明确给了标准输出时才传 expectedOutput（D18 实测模型会自己编一个，导致
+        // outputMatched 假阴性）。题干里不写样例，judge_code 就只能拿到 stdout、判不了对错。
+        seed("ALGORITHM", "EASY",
+                "用 Java 写一个程序：读入一行字符串，判断它是不是回文（区分大小写，只看字母和数字）。"
+                        + "是则输出 true，否则输出 false。\n"
+                        + "输入样例：abcba\n"
+                        + "输出样例：true",
+                "双指针从两端向中间比较，遇到不一致立即返回 false；跳过非字母数字字符。"
+                        + "时间 O(n)、空间 O(1)。",
+                "算法,回文,双指针");
+
+        seed("ALGORITHM", "EASY",
+                "用 Java 写一个程序：读入一个整数 n（1 ≤ n ≤ 40），输出斐波那契数列第 n 项"
+                        + "（F(1)=1，F(2)=1）。\n"
+                        + "输入样例：10\n"
+                        + "输出样例：55",
+                "迭代优于递归：递归是 O(2^n) 且 n=40 会明显变慢；用两个变量滚动即可 O(n)/O(1)。"
+                        + "注意 n=1、n=2 的边界。",
+                "算法,斐波那契,迭代");
+
+        seed("ALGORITHM", "MEDIUM",
+                "用 Java 写一个程序：第一行读入若干个空格分隔的整数，第二行读入目标值 target，"
+                        + "输出两个下标 i < j，使得第 i 个数加第 j 个数等于 target（保证有且只有一组解）。"
+                        + "下标从 0 开始，两个下标之间用一个空格分隔。\n"
+                        + "输入样例：2 7 11 15\n9\n"
+                        + "输出样例：0 1",
+                "一次遍历 + HashMap 存「值 → 下标」：对每个 nums[i] 查 target-nums[i] 是否出现过，"
+                        + "出现过就返回两个下标，否则把当前值放进去。时间 O(n)、空间 O(n)。"
+                        + "暴力双重循环 O(n^2) 也能过小数据，面试时要主动说优化方向。",
+                "算法,两数之和,哈希表");
     }
 
     private void seed(String category, String difficulty, String content, String answer, String tags) {
+        // 已有同题干则跳过（D19：老库补题的关键）。插入后同步登记，防同一批种子内重复
+        if (!existingContents.add(content)) {
+            return;
+        }
         Question q = new Question();
         q.setCategory(category);
         q.setDifficulty(difficulty);
@@ -149,5 +217,6 @@ public class QuestionSeeder implements ApplicationRunner {
         q.setTags(tags);
         q.setEnabled(true);
         questionMapper.insert(q);
+        seededCount++;
     }
 }

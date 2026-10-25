@@ -244,8 +244,22 @@ public class AgentRuntime {
      * 流式回复的增量片段（D13 SSE）：author + 一小段文字（通常几个字到一个词）。
      *
      * <p>与 {@link Turn} 的区别: text 是**增量**不是全量, 消费端负责拼接。
+     *
+     * <p><b>D19 起还承载工具调用信号</b>：{@code toolCall} 非空表示"这个 Agent 正在调用
+     * 某个工具"，此时 {@code text} 为空。判题要 0.6~10s，前端在这段时间里只有一片空白——
+     * 有了这个信号就能显示"判题中…"，而不是让用户以为卡死了。
      */
-    public record Chunk(String author, String text) {}
+    public record Chunk(String author, String text, String toolCall) {
+
+        /** 纯文本片段（D13 的既有用法）。 */
+        public Chunk(String author, String text) {
+            this(author, text, null);
+        }
+
+        public boolean isToolCall() {
+            return toolCall != null;
+        }
+    }
 
     /**
      * 流式跑一轮对话（D13 SSE）: 返回 Flowable 供 Controller 直接订阅,
@@ -261,7 +275,8 @@ public class AgentRuntime {
      * </ul>
      *
      * <p>兜底注意: 错误以 onError 抛给订阅者（订阅者负责转降级事件）;
-     * functionCall/functionResponse 事件被过滤, 不会混进文本流。
+     * functionResponse 被过滤（工具返回的原始 JSON 不进文本流）; functionCall 不混进文本，
+     * 而是转成 {@link Chunk#isToolCall()} 的信号（D19：给"判题中…"用）。
      */
     public io.reactivex.rxjava3.core.Flowable<Chunk> converseStream(Runner runner, String userId,
                                                                     String adkSessionId, String userText,
@@ -276,13 +291,19 @@ public class AgentRuntime {
                 .timeout(eventIntervalTimeout.toMillis(), TimeUnit.MILLISECONDS)
                 .concatMapIterable(e -> {
                     List<Chunk> out = new ArrayList<>();
+                    String author = e.author() == null ? "unknown" : e.author();
                     e.content().ifPresent(content ->
                             content.parts().ifPresent(parts -> parts.forEach(p ->
                                     p.text().ifPresent(t -> {
                                         if (!t.isBlank()) {
-                                            out.add(new Chunk(e.author() == null ? "unknown" : e.author(), t));
+                                            out.add(new Chunk(author, t));
                                         }
                                     }))));
+                    // 工具调用（D19）：先发信号再执行。ADK 把 functionCall 放在非 partial 的
+                    // 那个事件里，runFunctionCalls 紧跟其后才开始跑工具——所以消费端收到
+                    // 这个 Chunk 时，判题确实还没返回，提示是真的而不是装饰
+                    e.functionCalls().forEach(fc ->
+                            fc.name().ifPresent(name -> out.add(new Chunk(author, "", name))));
                     return out;
                 });
     }

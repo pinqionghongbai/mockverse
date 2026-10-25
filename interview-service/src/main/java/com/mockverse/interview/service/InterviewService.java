@@ -172,10 +172,18 @@ public class InterviewService {
     // SSE 流式（D13 下午）
     // ------------------------------------------------------------------
 
-    /** 流式端点的事件载荷: chunk=增量文本, done=整轮结束, error=降级。 */
-    public sealed interface StreamEvent permits ChunkEvent, DoneEvent, ErrorEvent {}
+    /** 流式端点的事件载荷: chunk=增量文本, tool=正在调用工具, done=整轮结束, error=降级。 */
+    public sealed interface StreamEvent permits ChunkEvent, ToolEvent, DoneEvent, ErrorEvent {}
 
     public record ChunkEvent(String author, String delta) implements StreamEvent {}
+
+    /**
+     * 工具调用信号（D19）：{@code judge_code} 要 0.6~10s，这段时间客户端只看到空白，
+     * 会以为卡死。前端收到就显示"正在判题…"，拿到第一段 chunk 再撤掉。
+     *
+     * <p>只报**工具名**，不报参数——参数里是候选人完整代码，没必要重复推一遍。
+     */
+    public record ToolEvent(String author, String tool) implements StreamEvent {}
 
     public record DoneEvent(int round, boolean finished) implements StreamEvent {}
 
@@ -218,8 +226,11 @@ public class InterviewService {
 
         return runtime.converseStream(rootRunner, userId, adkSessionId,
                         InterviewerPrompts.answerTurn(userAnswer, finished), AGENT_TIMEOUT)
-                .map(chunk -> (StreamEvent) new ChunkEvent(chunk.author(), chunk.text()))
+                .map(chunk -> chunk.isToolCall()
+                        ? (StreamEvent) new ToolEvent(chunk.author(), chunk.toolCall())
+                        : (StreamEvent) new ChunkEvent(chunk.author(), chunk.text()))
                 .doOnNext(evt -> {
+                    // 只聚合文本: 工具信号若参与聚合, 会在 turn 边界上插入空片段
                     if (evt instanceof ChunkEvent c) {
                         String prev = currentAuthor.get();
                         if (prev != null && !prev.equals(c.author())) {

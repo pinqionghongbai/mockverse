@@ -50,7 +50,8 @@ public class InterviewController {
      * 流式回答（D13）: 终端 {@code curl -N -X POST .../answer/stream} 逐字输出。
      *
      * <p>事件载荷是 {@link InterviewService.StreamEvent} 的 JSON 序列化:
-     * chunk(增量文本, 带 author 归因) / done(整轮结束) / error(降级话术)。
+     * chunk(增量文本, 带 author 归因) / tool(正在调用哪个工具, D19 的"判题中…"依据) /
+     * done(整轮结束) / error(降级话术)。
      * 业务校验失败(400/409)在订阅前同步抛出, 仍走 ProblemDetail。
      */
     @PostMapping(value = "/{sessionId}/answer/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
