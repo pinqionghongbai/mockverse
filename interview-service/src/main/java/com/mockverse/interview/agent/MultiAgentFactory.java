@@ -3,20 +3,28 @@ package com.mockverse.interview.agent;
 import com.google.adk.agents.BaseAgent;
 import com.google.adk.agents.LlmAgent;
 import com.google.adk.models.langchain4j.LangChain4j;
+import com.google.adk.tools.BaseToolset;
 import com.google.adk.tools.FunctionTool;
+import com.google.adk.tools.mcp.McpToolset;
+import com.google.adk.tools.mcp.StreamableHttpServerParameters;
 import com.mockverse.interview.a2a.A2AHttpCalls;
 import com.mockverse.interview.a2a.A2ARemoteAgent;
 import com.mockverse.interview.a2a.A2AServerConfig;
 import com.mockverse.interview.config.InterviewProperties;
+import com.mockverse.interview.config.JudgeMcpProperties;
 import com.mockverse.interview.config.RemoteAgentProperties;
+import com.mockverse.interview.mcp.ResilientMcpToolset;
 import io.a2a.client.http.A2ACardResolver;
 import io.a2a.client.http.JdkA2AHttpClient;
 import io.a2a.spec.A2AClientError;
 import io.a2a.spec.AgentCard;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -25,7 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>拓扑: {@code root_coordinator}（只路由不答题）→ 三个子 Agent:
  * <ul>
- *   <li>{@code interviewer_agent} — 进程内 {@link LlmAgent}（0.7 + pick_question）</li>
+ *   <li>{@code interviewer_agent} — 进程内 {@link LlmAgent}（0.7 + pick_question + judge_code）</li>
  *   <li>{@code knowledge_agent} — 跨进程 {@link A2ARemoteAgent} → knowledge-service:8082</li>
  *   <li>{@code resume_agent} — 跨进程 {@link A2ARemoteAgent} → resume-service:8083（带 userId）</li>
  * </ul>
@@ -70,27 +78,47 @@ public class MultiAgentFactory {
     private final QuestionTools questionTools;
     private final InterviewProperties properties;
     private final RemoteAgentProperties remoteProperties;
+    private final JudgeMcpProperties judgeProperties;
 
     /** 远端卡片缓存：key = 基地址。解析失败不缓存，下次调用可重试。 */
     private final Map<String, AgentCard> cardCache = new ConcurrentHashMap<>();
 
+    /**
+     * 判题工具集只建一次：{@link #create()} 会被调用两次（{@code InterviewService} 构造 +
+     * {@code A2AServerConfig} 建 bean），每次都 new 一个 {@code McpToolset} 就是两条 MCP 会话。
+     */
+    private volatile BaseToolset judgeToolsetCache;
+
     public MultiAgentFactory(LangChain4j deepSeekModel,
                              QuestionTools questionTools,
                              InterviewProperties properties,
-                             RemoteAgentProperties remoteProperties) {
+                             RemoteAgentProperties remoteProperties,
+                             JudgeMcpProperties judgeProperties) {
         this.deepSeekModel = deepSeekModel;
         this.questionTools = questionTools;
         this.properties = properties;
         this.remoteProperties = remoteProperties;
+        this.judgeProperties = judgeProperties;
     }
 
     public LlmAgent create() {
+        List<Object> interviewerTools = new ArrayList<>();
+        interviewerTools.add(FunctionTool.create(questionTools, "pickQuestion"));
+        BaseToolset judge = judgeToolset();
+        String instruction = InterviewerPrompts.of(properties.getPromptVersion());
+        if (judge != null) {
+            interviewerTools.add(judge);
+            // 规则只在工具真的挂上时追加：否则模型会去调一个不存在的工具
+            instruction += InterviewerPrompts.JUDGE_TOOL_SUFFIX;
+        }
+
         LlmAgent interviewer = LlmAgent.builder()
                 .name(INTERVIEWER)
                 .description(MultiAgentPrompts.INTERVIEWER_DESCRIPTION)
                 .model(deepSeekModel)
-                .instruction(InterviewerPrompts.of(properties.getPromptVersion()))
-                .tools(FunctionTool.create(questionTools, "pickQuestion"))
+                .instruction(instruction)
+                // 注意：tools(...) 是覆盖而不是追加，两个工具必须一次给全
+                .tools(interviewerTools)
                 .build();
 
         BaseAgent knowledge = new A2ARemoteAgent(
@@ -123,6 +151,59 @@ public class MultiAgentFactory {
     private Duration remoteTimeout() {
         int seconds = remoteProperties.getTimeoutSeconds();
         return seconds > 0 ? Duration.ofSeconds(seconds) : null;
+    }
+
+    /**
+     * 判题工具集（D18）：{@code judge_code} 由 judge-service:8084 通过 MCP Streamable HTTP 提供。
+     *
+     * <p><b>和两个 A2A 子 Agent 的区别</b>：知识库/简历是"整段活交给别人干"，所以做成子 Agent；
+     * 判题是"面试官在对话中顺手查一个事实"，交出去就丢了上下文，所以做成工具。模型看到的是
+     * 一个普通函数，Agent 层不区分它是进程内还是跨进程（{@code canonicalTools} 统一处理）。
+     *
+     * <p><b>不做启动期探活</b>：判题服务是可选组件，缺了它面试照常进行。真正连不上时由
+     * {@link ResilientMcpToolset} 兜底——超时/异常都降级成"本轮没有这个工具"。
+     */
+    private BaseToolset judgeToolset() {
+        if (!judgeProperties.isEnabled()) {
+            return null;
+        }
+        BaseToolset existing = judgeToolsetCache;
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (this) {
+            if (judgeToolsetCache == null) {
+                StreamableHttpServerParameters params = StreamableHttpServerParameters.builder()
+                        .url(judgeProperties.getUrl())
+                        .timeout(judgeProperties.getInitTimeout())
+                        .readTimeout(judgeProperties.getRequestTimeout())
+                        .build();
+                judgeToolsetCache = new ResilientMcpToolset(
+                        "judge_code@" + judgeProperties.getUrl(),
+                        new McpToolset(params),
+                        judgeProperties.getInitTimeout(),
+                        judgeProperties.getFailureCooldown());
+                log.info("已挂载判题工具: {} (init={}s, request={}s)",
+                        judgeProperties.getUrl(),
+                        judgeProperties.getInitTimeout().toSeconds(),
+                        judgeProperties.getRequestTimeout().toSeconds());
+            }
+            return judgeToolsetCache;
+        }
+    }
+
+    /** 关服务时顺手关掉 MCP 会话；失败只记日志，不影响停机。 */
+    @PreDestroy
+    void closeJudgeToolset() {
+        BaseToolset toolset = judgeToolsetCache;
+        if (toolset == null) {
+            return;
+        }
+        try {
+            toolset.close();
+        } catch (Exception e) {
+            log.debug("关闭判题 MCP 会话失败: {}", e.getMessage());
+        }
     }
 
     /**

@@ -46,6 +46,17 @@ mockverse:
     # 单次跨进程调用上限（秒）。SDK 的 HTTP 客户端没有读超时，远端挂死会永久占住订阅线程；
     # 服务端自身 30s 就会放回 working 快照，60s 留一倍余量（见 RemoteAgentProperties）
     timeout-seconds: ${REMOTE_AGENT_TIMEOUT_SECONDS:60}
+  judge:
+    # D18 判题 MCP Server（judge-service:8084）。关掉开关后面试官只是没有 judge_code，
+    # 面试流程照常走；服务起不来时由 ResilientMcpToolset 降级，不会拖垮整轮对话
+    enabled: ${JUDGE_MCP_ENABLED:true}
+    url: ${JUDGE_SERVICE_URL:http://localhost:8084/mcp}
+    # 握手超时。ADK 默认 5 分钟——判题服务没起时每轮都要挂 5 分钟，这里压到 10s
+    init-timeout: ${JUDGE_MCP_INIT_TIMEOUT:10s}
+    # 单次 judge_code 调用上限：判题服务自身 10s 运行 + 20s 编译 + 排队，45s 留足余量
+    request-timeout: ${JUDGE_MCP_REQUEST_TIMEOUT:45s}
+    # 加载失败后的冷却：这段时间内不再尝试，避免每轮都付一次超时代价
+    failure-cooldown: ${JUDGE_MCP_FAILURE_COOLDOWN:30s}
 
 logging:
   level:

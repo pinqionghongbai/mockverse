@@ -1,0 +1,25 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: judge-service
+
+mockverse:
+  judge:
+    # MCP 端点。必须与 servlet 注册路径一致（SDK 用 requestURI 比对，见 JudgeMcpConfig）
+    endpoint: /mcp
+    # 工作目录根。留空走系统临时目录；每次判题建独立子目录，结束即删
+    work-root: ""
+    compile-timeout: 20s
+    max-run-timeout: 10s
+    default-run-timeout: 5s
+    max-heap-mb: 256
+    max-output-bytes: 8000
+    max-code-length: 20000
+    max-concurrent: 2
+
+logging:
+  level:
+    com.mockverse.judge: INFO
+    io.modelcontextprotocol: INFO

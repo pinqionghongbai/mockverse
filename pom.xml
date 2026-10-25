@@ -32,6 +32,7 @@
         <module>interview-service</module>
         <module>knowledge-service</module>
         <module>resume-service</module>
+        <module>judge-service</module>
     </modules>
 
     <properties>
@@ -50,7 +51,34 @@
           换成 1.x 线会与 ADK 的 io.a2a.* 包名不兼容 (见 docs/a2a-comparison-d6.md)。
         -->
         <a2a-sdk.version>0.3.2.Final</a2a-sdk.version>
+        <!--
+          D18: judge-service 的 MCP 服务端。2.0.0 不是新挑的版本——google-adk 1.13.0 的
+          McpToolset 已经传递依赖 io.modelcontextprotocol.sdk:mcp:2.0.0（D18 开工时
+          `mvn dependency:tree -Dincludes=io.modelcontextprotocol.sdk` 实证）。
+          这里只是把"客户端已经在用的那条线"显式钉住，让服务端与客户端同版本。
+        -->
+        <mcp-sdk.version>2.0.0</mcp-sdk.version>
+        <!--
+          D18: MCP SDK 2.0.0 的 mcp-core 编译期依赖 jackson-annotations 2.20
+          （它引用了 Jackson 2.20 才有的 JsonFormat.Shape.POJO）。Spring Boot 3.3.1 的
+          jackson-bom 把 annotations 压到 2.17.1，运行期直接
+          NoSuchFieldError: JsonFormat$Shape does not have member field POJO —— D18 实测。
+          只抬 annotations 不抬 databind：annotations 是纯注解、向后兼容，databind 仍留在
+          Spring Boot 认证过的 2.17.1，把改动面压到最小。
+        -->
+        <jackson-annotations.version>2.20</jackson-annotations.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 覆盖 spring-boot-dependencies 里 jackson-bom 的传递版本，见上方注释 -->
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${jackson-annotations.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>

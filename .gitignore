@@ -23,3 +23,6 @@ logs/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 当日验证脚手架（脚本/报文/输出，不归档；结论写进 docs/journal）
+.d??tmp/

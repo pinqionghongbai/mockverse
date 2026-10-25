@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      MCP 判题服务 (D18)。
+
+      定位: 一个**真正的 MCP Server**——用 MCP 协议暴露 judge_code 工具, 而不是在
+      interview-service 里写个进程内 FunctionTool 冒充。这样"工具注册是运行时发现的"
+      (Q12 的核心论点) 才有实证: 客户端通过 tools/list 拉到 schema, 调用经 JSON-RPC 往返。
+
+      传输选 Streamable HTTP 而不是 STDIO: 本服务是独立部署的第四个微服务, 生命周期
+      不跟 interview-service 绑在一起; 也避开了 D4 撞过的 Windows `npx.cmd` 那类坑
+      (我们的 server 是 java 进程, 但独立进程仍便于用 curl / MCP Inspector 单独验证)。
+
+      依赖版本全部由 mockverse-parent 集中声明 —— 版本锁定纪律: 禁止中途变更依赖版本。
+    -->
+    <parent>
+        <groupId>com.mockverse</groupId>
+        <artifactId>mockverse-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>judge-service</artifactId>
+    <name>MockVerse Judge Service</name>
+    <description>MCP 判题服务: 用 MCP 协议暴露 judge_code, 真实编译/运行 Java 代码, 8084</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+          MCP 服务端。mcp-core 里既有客户端也有服务端实现, 这里只用服务端那一半
+          (McpServer.sync + HttpServletStreamableServerTransportProvider)。
+        -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp</artifactId>
+            <version>${mcp-sdk.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>
