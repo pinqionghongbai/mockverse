@@ -27,6 +27,11 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        # D20 二查修正：KafkaProducer.send() 在拿不到元数据时会**阻塞** max.block.ms（默认 60000）
+        # 再抛异常。实测 broker 停机时"提交"要卡满 60s 才返回 FAILED，直接违反
+        # "提交即返回判题中"。压到 2s：连不上就快速失败，状态如实变 FAILED。
+        max.block.ms: ${KAFKA_MAX_BLOCK_MS:2000}
     consumer:
       group-id: ${INTERVIEW_KAFKA_GROUP:interview-service}
       auto-offset-reset: earliest

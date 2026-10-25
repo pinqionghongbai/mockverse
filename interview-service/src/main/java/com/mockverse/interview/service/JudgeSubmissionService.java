@@ -5,12 +5,14 @@ import com.mockverse.interview.kafka.JudgeRequestMessage;
 import com.mockverse.interview.kafka.JudgeRequestProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -76,21 +78,41 @@ public class JudgeSubmissionService {
                 System.currentTimeMillis());
         submissions.put(submissionId, submission);
 
-        boolean queued = producer.send(new JudgeRequestMessage(
+        CompletableFuture<SendResult<String, String>> future = producer.send(new JudgeRequestMessage(
                 submissionId, code, stdin, expectedOutput, timeoutSeconds));
-        if (!queued) {
-            // 投递失败：提交本身仍然是成功的（客户端已经拿到 ID），但状态要如实变成 FAILED，
-            // 否则客户端会一直等一个永远不来的结果
-            Submission failed = new Submission(submissionId, sessionId, STATUS_FAILED,
-                    null, submission.submittedAt());
-            submissions.put(submissionId, failed);
-            publish(failed);
+        if (future == null) {
+            // 同步失败（序列化 / broker 不可达且已超过 max.block.ms）：提交本身仍然返回，
+            // 但状态如实变成 FAILED，否则客户端会一直等一个永远不来的结果
             evictIfNeeded();
-            return failed;
+            return markFailed(submissionId);
         }
+        // 异步失败（重试耗尽 / 分区不可用）只能从 Future 上看到——二查修正：
+        // 之前只返回 boolean，这类失败会静默丢掉，提交永远停在 PENDING
+        future.whenComplete((result, error) -> {
+            if (error != null) {
+                log.error("judge-request 异步发送失败: submissionId={}", submissionId, error);
+                markFailed(submissionId);
+            }
+        });
 
         evictIfNeeded();
         return submission;
+    }
+
+    /**
+     * 把提交标成 FAILED 并推送。**只在仍为 PENDING 时生效**——与结果侧同一个状态机，
+     * 避免"结果已经到了、失败回调才来"把 COMPLETED 覆盖成 FAILED。
+     */
+    private Submission markFailed(String submissionId) {
+        Submission current = submissions.get(submissionId);
+        if (current == null || !STATUS_PENDING.equals(current.status())) {
+            return current;
+        }
+        Submission failed = new Submission(submissionId, current.sessionId(), STATUS_FAILED,
+                null, current.submittedAt());
+        submissions.put(submissionId, failed);
+        publish(failed);
+        return failed;
     }
 
     /** 查询单个提交的当前状态（轮询兜底，SSE 连不上时用）。 */

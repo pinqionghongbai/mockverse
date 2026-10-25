@@ -6,7 +6,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 把一次判题提交发到 {@code judge-request}（D20）。
@@ -31,27 +34,33 @@ public class JudgeRequestProducer {
     /**
      * 发送判题请求。
      *
-     * @return 发送是否成功入队。失败不抛异常——调用方已经把 {@code submissionId} 返回给客户端了，
-     *         这里再抛只会让"提交"这个动作变成 500；由调用方决定是否把状态标成 FAILED。
+     * <p><b>返回 Future 而不是 boolean</b>（二查修正）：{@code KafkaTemplate.send()} 是异步的，
+     * 只有"序列化失败 / 取元数据超时"这类**同步**失败会抛出来；broker 收到消息之后才失败的
+     * （重试耗尽、分区不可用）只会体现在返回的 Future 上。只返回 boolean 会让这类失败静默
+     * 丢掉——提交永远停在 PENDING。
+     *
+     * @return 发送 Future；同步失败（序列化 / 取元数据超时）返回 {@code null}
      */
-    public boolean send(JudgeRequestMessage message) {
+    public CompletableFuture<SendResult<String, String>> send(JudgeRequestMessage message) {
         String payload;
         try {
             payload = objectMapper.writeValueAsString(message);
         } catch (JsonProcessingException e) {
             log.error("判题请求序列化失败: submissionId={}", message.submissionId(), e);
-            return false;
+            return null;
         }
         try {
-            kafkaTemplate.send(requestTopic, message.submissionId(), payload);
-            log.info("judge-request 已发送: submissionId={}, topic={}", message.submissionId(), requestTopic);
-            return true;
+            CompletableFuture<SendResult<String, String>> future =
+                    kafkaTemplate.send(requestTopic, message.submissionId(), payload);
+            log.info("judge-request 已入队: submissionId={}, topic={}",
+                    message.submissionId(), requestTopic);
+            return future;
         } catch (RuntimeException e) {
-            // Kafka 不可用：提交本身不该失败（用户已经点过"提交"了），把错误留在日志里，
-            // 状态由调用方标记；D20 的验收要求是"提交即返回判题中"，不是"提交必须成功入队"
-            log.error("judge-request 发送失败: submissionId={}, topic={}",
+            // Kafka 不可用：KafkaProducer.send() 会先阻塞 max.block.ms 等元数据再抛。
+            // application.yml 里把这个值压到 2s —— 默认 60s 会让"提交即返回"变成"提交等一分钟"
+            log.error("judge-request 发送失败（同步）: submissionId={}, topic={}",
                     message.submissionId(), requestTopic, e);
-            return false;
+            return null;
         }
     }
 }
