@@ -41,8 +41,10 @@ public class QuestionSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
-            // 必须包事务：13 条 seed 是逐条 insert，中途失败会留下"半套题库"，
-            // 而下次启动的去重判断会认为"已有数据"直接跳过 → 题库永久残缺且无告警。
+            // 包事务：13 条 seed 是逐条 insert，让"一次启动的种子"整体生效或整体回滚，
+            // 日志里的"本次新增 N 道"才和库里实际增量对得上。
+            // （D19 改成按题干去重后，即使真留下半套题库，下次启动也会补齐——事务不再是
+            //   "防永久残缺"的唯一防线，但仍保留：半套状态会让这一次的统计语义失真。）
             // 注意不能直接给 seedMissing() 加 @Transactional——同类内部调用不走代理，注解会失效
             // （巧合的是本类第 10 道种子题讲的正是这个知识点）。
             transactionTemplate.executeWithoutResult(status -> seedMissing());
