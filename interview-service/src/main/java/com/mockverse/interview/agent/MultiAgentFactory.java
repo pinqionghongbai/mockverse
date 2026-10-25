@@ -4,6 +4,7 @@ import com.google.adk.agents.BaseAgent;
 import com.google.adk.agents.LlmAgent;
 import com.google.adk.models.langchain4j.LangChain4j;
 import com.google.adk.tools.FunctionTool;
+import com.mockverse.interview.a2a.A2AHttpCalls;
 import com.mockverse.interview.a2a.A2ARemoteAgent;
 import com.mockverse.interview.a2a.A2AServerConfig;
 import com.mockverse.interview.config.InterviewProperties;
@@ -15,6 +16,7 @@ import io.a2a.spec.AgentCard;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -56,6 +58,14 @@ public class MultiAgentFactory {
     /** A2A 规范的服务发现路径。与 {@link A2AServerConfig#AGENT_CARD_PATH} 同值。 */
     private static final String AGENT_CARD_PATH = "/.well-known/agent-card.json";
 
+    /**
+     * 启动期拉卡片的上限：本机/同网段的 GET 远小于 1s，10s 已足够宽裕。
+     *
+     * <p>SDK 的 HTTP 客户端没有超时（见 {@code A2AHttpCalls}），远端"连得上但不回"会让
+     * interview-service 永远卡在启动阶段——既不是 fail-fast 也不是可用状态，只能靠人 Ctrl-C。
+     */
+    private static final Duration CARD_FETCH_TIMEOUT = Duration.ofSeconds(10);
+
     private final LangChain4j deepSeekModel;
     private final QuestionTools questionTools;
     private final InterviewProperties properties;
@@ -87,13 +97,15 @@ public class MultiAgentFactory {
                 KNOWLEDGE, MultiAgentPrompts.KNOWLEDGE_DESCRIPTION,
                 resolveCard(remoteProperties.getKnowledgeUrl()),
                 // 知识答疑不需要用户身份
-                false);
+                false,
+                remoteTimeout());
 
         BaseAgent resume = new A2ARemoteAgent(
                 RESUME, MultiAgentPrompts.RESUME_DESCRIPTION,
                 resolveCard(remoteProperties.getResumeUrl()),
                 // 简历诊断要归档到真实用户名下，把 session.userId 放进 params.metadata
-                true);
+                true,
+                remoteTimeout());
 
         return LlmAgent.builder()
                 .name(ROOT)
@@ -103,6 +115,14 @@ public class MultiAgentFactory {
                 .instruction(MultiAgentPrompts.COORDINATOR)
                 .subAgents(interviewer, knowledge, resume)
                 .build();
+    }
+
+    /**
+     * 远端调用上限；配置成 0 或负数表示不设上限（只用于压测/排障，见 {@code A2ARemoteAgent}）。
+     */
+    private Duration remoteTimeout() {
+        int seconds = remoteProperties.getTimeoutSeconds();
+        return seconds > 0 ? Duration.ofSeconds(seconds) : null;
     }
 
     /**
@@ -117,8 +137,9 @@ public class MultiAgentFactory {
             return cached;
         }
         try {
-            AgentCard card = new A2ACardResolver(
-                    new JdkA2AHttpClient(), baseUrl, baseUrl + AGENT_CARD_PATH).getAgentCard();
+            AgentCard card = A2AHttpCalls.call("从 " + baseUrl + " 解析 AgentCard", CARD_FETCH_TIMEOUT,
+                    () -> new A2ACardResolver(
+                            new JdkA2AHttpClient(), baseUrl, baseUrl + AGENT_CARD_PATH).getAgentCard());
             cardCache.put(baseUrl, card);
             log.info("已解析远端 AgentCard: {} @ {}", card.name(), baseUrl);
             return card;

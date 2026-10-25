@@ -24,4 +24,18 @@ public class RemoteAgentProperties {
 
     /** resume-service 的基地址。 */
     private String resumeUrl = "http://localhost:8083";
+
+    /**
+     * 单次跨进程调用的上限（秒）。
+     *
+     * <p><b>为什么必须有这个值</b>：a2a SDK 的 {@code JdkA2AHttpClient} 建请求时只设了 URI，
+     * 既没有 {@code connectTimeout} 也没有 {@code HttpRequest.timeout()}——连接建立后对端一直
+     * 不回，{@code send()} 会**永久**阻塞。而 {@code AgentRuntime.converse} 的整轮超时只能让
+     * 调用方拿到降级话术，被卡住的订阅线程不会因此解开：远端挂一次就永久少一个线程（D17 六查）。
+     *
+     * <p><b>为什么是 60s</b>：服务端 {@code agentCompletionTimeoutSeconds} 默认 30s——超过这个
+     * 时间它自己就会放回 {@code working} 快照（本类随后抛"未执行完成"）。60s 留了一倍余量，
+     * 只在真正挂死（连快照都等不到）时才触发，正常慢请求（resume 实测 17.95s）不会被误杀。
+     */
+    private int timeoutSeconds = 60;
 }

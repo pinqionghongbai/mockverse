@@ -43,6 +43,9 @@ mockverse:
     # MultiAgentFactory 建树时会拉这两张 AgentCard，拉不到就启动失败（fail-fast，见 RemoteAgentProperties）
     knowledge-url: ${KNOWLEDGE_SERVICE_URL:http://localhost:8082}
     resume-url: ${RESUME_SERVICE_URL:http://localhost:8083}
+    # 单次跨进程调用上限（秒）。SDK 的 HTTP 客户端没有读超时，远端挂死会永久占住订阅线程；
+    # 服务端自身 30s 就会放回 working 快照，60s 留一倍余量（见 RemoteAgentProperties）
+    timeout-seconds: ${REMOTE_AGENT_TIMEOUT_SECONDS:60}
 
 logging:
   level:

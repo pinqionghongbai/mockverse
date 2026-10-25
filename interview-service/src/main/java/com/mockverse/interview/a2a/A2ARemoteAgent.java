@@ -18,6 +18,7 @@ import io.a2a.spec.TaskState;
 import io.reactivex.rxjava3.core.Flowable;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -55,12 +56,23 @@ import java.util.Optional;
  * <p><b>失败一律抛异常</b>：远端不可达、返回 FAILED、返回非 COMPLETED 状态、返回未知类型
  * 都抛出去，交给 {@code AgentRuntime.converse} 的三层兜底统一降级——这里不做静默吞掉，
  * 否则面试官会对着一句空话继续追问。
+ *
+ * <p><b>调用有上限</b>（D17 六查）：SDK 的 HTTP 客户端没有读超时，远端挂死会永久占住订阅
+ * 线程。这里给每次调用加 {@code remoteTimeout}，到点中断 HTTP 请求并抛异常走统一降级。
  */
 @Slf4j
 public class A2ARemoteAgent extends BaseAgent {
 
     private final AgentCard agentCard;
     private final JSONRPCTransport transport;
+
+    /**
+     * 单次远端调用的上限。
+     *
+     * <p>值为 null 表示不设上限（仅测试用，生产配置恒非 null）。为什么需要上限、为什么不
+     * 违反坑 1 的阻塞约束，见 {@link A2AHttpCalls}。
+     */
+    private final Duration remoteTimeout;
 
     /**
      * 是否把 {@code session.userId()} 塞进 {@code params.metadata.userId}。
@@ -74,13 +86,15 @@ public class A2ARemoteAgent extends BaseAgent {
      * @param name        子 Agent 名，必须与 coordinator 提示词里的 {@code transfer_to_agent} 目标一致
      * @param description 注入给 coordinator 做路由，写成"什么样的消息该给我"（D12 的经验）
      * @param agentCard   远端卡片；已由调用方解析好，本类不再联网
+     * @param remoteTimeout 单次调用上限；null 表示不设上限
      */
     public A2ARemoteAgent(String name, String description, AgentCard agentCard,
-                          boolean forwardSessionUserId) {
+                          boolean forwardSessionUserId, Duration remoteTimeout) {
         super(name, description, List.of(), List.of(), List.of());
         this.agentCard = agentCard;
         this.transport = new JSONRPCTransport(agentCard);
         this.forwardSessionUserId = forwardSessionUserId;
+        this.remoteTimeout = remoteTimeout;
     }
 
     @Override
@@ -108,10 +122,21 @@ public class A2ARemoteAgent extends BaseAgent {
         // 一旦订阅被挪到别的调度器，HTTP 会带着 working 快照提前返回，远端稍后产出的文本
         // 全部落进已关闭的队列（D17 实测：0.55s 返回 working，3.2s 后远端才答完）。
         // 官方 RemoteA2AAgent 同样用 Flowable.create + dispatchSynchronously，理由一致。
-        return Flowable.fromCallable(() -> transport.sendMessage(params, null))
+        return Flowable.fromCallable(() -> callRemote(params))
                 .map(kind -> toEvent(kind, invocationContext))
                 .doOnNext(e -> log.debug("远端 {} 产出事件 author={} turnComplete={}",
                         agentCard.name(), e.author(), e.turnComplete()));
+    }
+
+    /**
+     * 带超时地调远端 {@code message/send}（超时的理由与阻塞语义见 {@link A2AHttpCalls}）。
+     *
+     * <p>订阅线程依然同步阻塞到远端答完，{@code AgentExecutor.execute()} 照旧在远端返回之后
+     * 才结束——这里只是让"远端挂死"有一个到点中断的出口。
+     */
+    private EventKind callRemote(MessageSendParams params) {
+        return A2AHttpCalls.call("调用 " + agentCard.name(), remoteTimeout,
+                () -> transport.sendMessage(params, null));
     }
 
     /**
@@ -140,13 +165,39 @@ public class A2ARemoteAgent extends BaseAgent {
 
         if (forwardSessionUserId) {
             String userId = invocationContext.session().userId();
-            if (userId != null && !userId.isBlank()) {
+            if (isNumericUserId(userId)) {
                 Map<String, Object> metadata = new LinkedHashMap<>();
                 metadata.put("userId", userId);
                 builder.metadata(metadata);
+            } else if (userId != null && !userId.isBlank()) {
+                // 从 A2A 端点进来的请求，session userId 是 ADK 的 AgentExecutor 强写的
+                // A2A_USER_<contextId>——那是会话标识，不是业务用户身份。原样转发会让下游
+                // resume-service 打「metadata.userId 不是合法数字」，把「调用方没提供用户身份」
+                // 误报成「调用方传错了值」，排查时会去查一个根本不存在的问题（D17 六查实测）。
+                log.debug("会话 userId={} 不是业务用户 ID（A2A 入口的 ADK 会话标识），不转发", userId);
             }
         }
         return builder.build();
+    }
+
+    /**
+     * 只有能解析成 {@code Long} 的才算业务用户 ID。
+     *
+     * <p>判据与下游严格对齐：resume-service 的 {@code ResumeTools.resolveUserId} 就是用
+     * {@code Long.valueOf} 解析 {@code metadata.userId} 的，传一个它解析不了的值只会让它的
+     * 归因从「调用方没提供」变成「调用方传了非法值」。这里不认 ADK 的 {@code A2A_USER_} 前缀，
+     * 因为那是 ADK 的实现细节；认"能不能解析成 Long"才是与业务契约一致的标准。
+     */
+    private static boolean isNumericUserId(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return false;
+        }
+        try {
+            Long.parseLong(userId);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     /**
