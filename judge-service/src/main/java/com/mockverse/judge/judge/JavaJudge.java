@@ -13,8 +13,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Semaphore;
@@ -185,41 +187,120 @@ public class JavaJudge {
      * 文件名该叫什么：{@code public} 类型存在时只能是它（javac 的硬约束），否则返回 null。
      */
     private static String detectPublicType(String code) {
-        Matcher pub = PUBLIC_TYPE.matcher(code);
+        Matcher pub = PUBLIC_TYPE.matcher(mask(code));
         return pub.find() ? pub.group(1) : null;
     }
 
     /**
-     * 启动类该是哪个：**包含 main 方法的那个类型**。
+     * 启动类该是哪个：**包住 main 方法的那层类型**。
      *
      * <p><b>为什么不能取"第一个类型"</b>（D18 实测踩到）：候选人常把辅助类写在前、主类写在后，
      * 例如 {@code class Helper {...} class Solution { main }}。取第一个会去跑 {@code Helper}，
      * 得到"找不到 main 方法"——把一段**完全正确**的代码判成了错，而且是很难自查的错。
      *
-     * <p>做法：找第一个 {@code static void main(} 的位置，取它之前**最后一个**类型声明。
-     * 没有 main 时返回 null，由调用方回落到 public 类型/默认名——反正跑不起来，错误会如实返回。
+     * <p><b>为什么也不能取"main 之前最后一个类型"</b>（D18 六查实测踩到，同一族病灶）：
+     * {@code class Solution { static class Node {...} public static void main(...) }} 里，
+     * main 之前最后一个类型是**嵌套的** {@code Node}，跑它同样"找不到 main 方法"。
+     * 候选人为链表/树题写静态内部类是常态，这条路必须走对。
      *
-     * <p>注释/字符串里的 {@code class Foo} 与 {@code main} 可能被误认。这类误判的后果是
-     * javac 报"类名与文件名不符"或"找不到 main 方法"——**可观察的失败**，不会静默判对。
+     * <p>做法：先把注释/字符串/字符字面量抹成空格（等长，下标不变），再用花括号栈扫描——
+     * 遇到类型声明就记住名字，遇到 {@code {} 就压栈，遇到 {@code }} 就出栈；走到 main 的位置时，
+     * 栈顶就是包住它的那个类型。没有 main 时返回 null，由调用方回落到 public 类型/默认名——
+     * 反正跑不起来，错误会如实返回。
+     *
+     * <p>抹掉注释与字符串还顺带解决了"注释里写 {@code class Foo} / {@code main} 被误认"。
+     * 仍可能误判的是**文本块里的伪代码**（已按字符串抹掉，不会命中）与 `$` 嵌套类的调用形式
+     * （{@code java Outer$Inner}）——后者不在面试题的常见写法里。
      */
     private static String detectMainClass(String code) {
-        Matcher main = MAIN_METHOD.matcher(code);
-        boolean hasMain = main.find();
-        int mainAt = hasMain ? main.start() : -1;
+        String masked = mask(code);
+        Matcher main = MAIN_METHOD.matcher(masked);
+        if (!main.find()) {
+            return null;
+        }
+        int mainAt = main.start();
 
-        Matcher type = TYPE_DECL.matcher(code);
-        String last = null;
-        String beforeMain = null;
-        while (type.find()) {
-            last = type.group(1);
-            if (hasMain && type.start() < mainAt) {
-                beforeMain = type.group(1);
+        Matcher type = TYPE_DECL.matcher(masked);
+        boolean hasType = type.find();
+        Deque<String> enclosing = new ArrayDeque<>();
+        String pending = null;
+        for (int i = 0; i < masked.length(); i++) {
+            while (hasType && type.start() == i) {
+                pending = type.group(1);
+                hasType = type.find();
+            }
+            if (i == mainAt) {
+                String name = enclosing.peek();
+                return name == null || name.isEmpty() ? null : name;
+            }
+            char c = masked.charAt(i);
+            if (c == '{') {
+                // 非类型的花括号（方法体/初始化块/匿名类）压一个空名占位，保证出栈对齐
+                enclosing.push(pending == null ? "" : pending);
+                pending = null;
+            } else if (c == '}' && !enclosing.isEmpty()) {
+                enclosing.pop();
             }
         }
-        if (beforeMain != null) {
-            return beforeMain;
+        return null;
+    }
+
+    /**
+     * 把注释、字符串、字符字面量抹成空格，**保持长度与下标不变**。
+     *
+     * <p>只为让正则与花括号计数看不见它们：注释里的 {@code class}、字符串里的 {@code &#123;}
+     * 都会把朴素的文本扫描带偏。换行符保留，行号与文本块边界因此不受影响。
+     */
+    private static String mask(String code) {
+        char[] out = code.toCharArray();
+        int n = out.length;
+        int i = 0;
+        while (i < n) {
+            char c = out[i];
+            if (c == '/' && i + 1 < n && out[i + 1] == '/') {
+                while (i < n && out[i] != '\n') {
+                    out[i++] = ' ';
+                }
+            } else if (c == '/' && i + 1 < n && out[i + 1] == '*') {
+                out[i++] = ' ';
+                out[i++] = ' ';
+                while (i < n && !(out[i] == '*' && i + 1 < n && out[i + 1] == '/')) {
+                    out[i++] = ' ';
+                }
+                if (i < n) {
+                    out[i++] = ' ';
+                }
+                if (i < n) {
+                    out[i++] = ' ';
+                }
+            } else if (c == '"' || c == '\'') {
+                boolean textBlock = c == '"' && i + 2 < n && out[i + 1] == '"' && out[i + 2] == '"';
+                int quote = textBlock ? 3 : 1;
+                for (int k = 0; k < quote && i < n; k++) {
+                    out[i++] = ' ';
+                }
+                while (i < n) {
+                    if (out[i] == '\\' && i + 1 < n) {
+                        out[i++] = ' ';
+                        out[i++] = ' ';
+                    } else if (textBlock && out[i] == '"' && i + 2 < n
+                            && out[i + 1] == '"' && out[i + 2] == '"') {
+                        out[i++] = ' ';
+                        out[i++] = ' ';
+                        out[i++] = ' ';
+                        break;
+                    } else if (!textBlock && out[i] == c) {
+                        out[i++] = ' ';
+                        break;
+                    } else {
+                        out[i++] = ' ';
+                    }
+                }
+            } else {
+                i++;
+            }
         }
-        return hasMain ? last : null;
+        return new String(out);
     }
 
     /** 用当前 JVM 自带的 JDK 工具，不依赖 PATH（服务被守护进程拉起时 PATH 往往没有 java）。 */
