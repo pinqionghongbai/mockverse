@@ -103,6 +103,11 @@ graph TB
     IV --> REDIS
 ```
 
+> **D18 落地实况**：判题 Server 已实现为**独立第四个进程** `judge-service:8084`
+> （MCP Streamable HTTP `/mcp`），而不是嵌在面试官服务里——这样它能被任何 MCP 客户端复用，
+> 面试官只需知道一个 URL。上图的端口分配是 D30 目标态，实际拆分时 knowledge=8082、
+> resume=8083（与图中相反），以 STATUS 第六节的"四服务现状"表为准。
+
 ---
 
 ## 三、A2A SDK 的版本线（D6 实证 + D7 复查修正）
