@@ -1,0 +1,2 @@
+[{"name":"Hello","args":{"code":"public class Hello{public static void main(String[] a){System.out.println(42);}}","stdin":null,"expectedOutput":"42"}},
+ {"name":"Fib","args":{"code":"import java.util.Scanner; public class Fib{public static void main(String[] a){Scanner s=new Scanner(System.in);int n=s.nextInt();long x=1,y=1;for(int i=3;i<=n;i++){long t=x+y;x=y;y=t;}System.out.println(n<=2?1:y);}}","stdin":"10","expectedOutput":"55"}}]

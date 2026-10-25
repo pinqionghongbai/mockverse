@@ -1,0 +1,90 @@
+[
+  {
+    "name": "正常：Hello + 中文输出",
+    "args": {
+      "code": "public class Hello { public static void main(String[] a) { System.out.println(\"你好，MockVerse\"); System.out.println(1 + 2); } }",
+      "expectedOutput": "你好，MockVerse\n3"
+    }
+  },
+  {
+    "name": "编译错误：缺少分号",
+    "args": {
+      "code": "public class Bad { public static void main(String[] a) { int x = 1 } }"
+    }
+  },
+  {
+    "name": "运行超时：死循环",
+    "args": {
+      "code": "public class Loop { public static void main(String[] a) { while (true) { } } }",
+      "timeoutSeconds": 2
+    }
+  },
+  {
+    "name": "输出不匹配",
+    "args": {
+      "code": "public class Ans { public static void main(String[] a) { System.out.println(41); } }",
+      "expectedOutput": "42"
+    }
+  },
+  {
+    "name": "运行时异常",
+    "args": {
+      "code": "public class Boom { public static void main(String[] a) { int[] x = new int[1]; System.out.println(x[5]); } }"
+    }
+  },
+  {
+    "name": "stdin 输入",
+    "args": {
+      "code": "import java.util.Scanner; public class Sum { public static void main(String[] a) { Scanner s = new Scanner(System.in); int x = s.nextInt(); System.out.println(x * 2); } }",
+      "stdin": "21",
+      "expectedOutput": "42"
+    }
+  },
+  {
+    "name": "参数非法：空代码",
+    "args": {
+      "code": "   "
+    }
+  },
+  {
+    "name": "无 public 类：多类型 + 辅助类",
+    "args": {
+      "code": "class Helper { static int twice(int x) { return x * 2; } }\nclass NoPublic { public static void main(String[] a) { System.out.println(Helper.twice(21)); } }",
+      "expectedOutput": "42"
+    }
+  },
+  {
+    "name": "超长输出：截断",
+    "args": {
+      "code": "public class Flood { public static void main(String[] a) { for (int i = 0; i < 20000; i++) System.out.println(\"line-\" + i); } }"
+    }
+  },
+  {
+    "name": "中文注释 + 中文标识符",
+    "args": {
+      "code": "// 判断字符串是否回文\nclass 工具 { static int 长度(String s) { return s.length(); } }\npublic class Cn { /* 中文注释 */ public static void main(String[] a) { System.out.println(\"结果=\" + 工具.长度(\"abc\")); } }",
+      "expectedOutput": "结果=3"
+    }
+  },
+  {
+    "name": "嵌套辅助类在前：static class Node",
+    "args": {
+      "code": "public class Sol {\n  static class Node { int v; Node(int v) { this.v = v; } }\n  public static void main(String[] a) { System.out.println(new Node(7).v); }\n}",
+      "expectedOutput": "7"
+    }
+  },
+  {
+    "name": "注释里出现 class/main 字样",
+    "args": {
+      "code": "// static void main( 在注释里\n// class Fake {}\npublic class Real { public static void main(String[] a) { System.out.println(\"ok\"); } }",
+      "expectedOutput": "ok"
+    }
+  },
+  {
+    "name": "字符串里含花括号与 class 字样",
+    "args": {
+      "code": "public class Str { public static void main(String[] a) { String s = \"class X { }\"; System.out.println(s.length()); } }",
+      "expectedOutput": "11"
+    }
+  }
+]
