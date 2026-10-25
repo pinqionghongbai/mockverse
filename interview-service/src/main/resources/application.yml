@@ -38,6 +38,11 @@ mockverse:
     app-name: mockverse
     max-rounds: 5
     prompt-version: v3
+  remote:
+    # D17 跨进程子 Agent 的地址。interview-service 必须在 8082/8083 之后启动：
+    # MultiAgentFactory 建树时会拉这两张 AgentCard，拉不到就启动失败（fail-fast，见 RemoteAgentProperties）
+    knowledge-url: ${KNOWLEDGE_SERVICE_URL:http://localhost:8082}
+    resume-url: ${RESUME_SERVICE_URL:http://localhost:8083}
 
 logging:
   level:

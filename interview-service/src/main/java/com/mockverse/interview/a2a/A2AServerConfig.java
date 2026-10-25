@@ -51,9 +51,9 @@ public class A2AServerConfig {
     /**
      * 暴露给远端的 Agent 树。
      *
-     * <p>用 {@link MultiAgentFactory#create()} 的完整树（root_coordinator + interviewer_agent）：
-     * 远端通过 A2A 发来一条用户消息，coordinator 照常做进程内路由。D17 的
-     * RemoteA2AAgent 把知识/简历意图再转出去，形成跨进程的两级路由。
+     * <p>用 {@link MultiAgentFactory#create()} 的完整树（root_coordinator + interviewer_agent
+     * + 两个跨进程子 Agent）：远端通过 A2A 发来一条用户消息，coordinator 照常做进程内路由，
+     * 需要知识/简历能力时再由 {@link A2ARemoteAgent} 转出去，形成跨进程的两级路由（D17）。
      */
     @Bean
     public BaseAgent a2aAgent(MultiAgentFactory factory) {
