@@ -34,6 +34,17 @@
         </dependency>
 
         <!--
+          D20: 异步判题的消费端。Kafka 版本由 spring-boot-starter-parent 3.3.1 的 BOM 决定
+          （版本锁定纪律：不手填版本号，跟着 Boot 线走）。
+          判题仍然是 JavaJudge 的同步实现——Kafka 只是把"谁来触发"从 Agent 工具调用
+          换成了消息队列，判题逻辑一行没改。
+        -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!--
           MCP 服务端。mcp-core 里既有客户端也有服务端实现, 这里只用服务端那一半
           (McpServer.sync + HttpServletStreamableServerTransportProvider)。
         -->

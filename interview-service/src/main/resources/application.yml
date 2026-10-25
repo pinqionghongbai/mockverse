@@ -21,6 +21,17 @@ spring:
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
+  kafka:
+    # D20: 单节点 KRaft Kafka（容器名 mockverse-kafka，映射 9092）
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: ${INTERVIEW_KAFKA_GROUP:interview-service}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
 mybatis-plus:
   configuration:
@@ -38,6 +49,13 @@ mockverse:
     app-name: mockverse
     max-rounds: 5
     prompt-version: v3
+    kafka:
+      # D20 异步判题。关掉后 /judge 接口仍然存在但提交会立刻变成 FAILED——
+      # 之所以提供开关，是为了"只想跑 D19 的同步链路"时不用起 Kafka
+      enabled: ${INTERVIEW_KAFKA_ENABLED:true}
+      judge-request-topic: ${JUDGE_REQUEST_TOPIC:judge-request}
+      judge-result-topic: ${JUDGE_RESULT_TOPIC:judge-result}
+      group-id: ${INTERVIEW_KAFKA_GROUP:interview-service}
   remote:
     # D17 跨进程子 Agent 的地址。interview-service 必须在 8082/8083 之后启动：
     # MultiAgentFactory 建树时会拉这两张 AgentCard，拉不到就启动失败（fail-fast，见 RemoteAgentProperties）

@@ -4,6 +4,20 @@ server:
 spring:
   application:
     name: judge-service
+  kafka:
+    # D20: 单节点 KRaft Kafka（容器名 mockverse-kafka，映射 9092）
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${JUDGE_KAFKA_GROUP:judge-service}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    listener:
+      # 手动 ack：判题成功才提交位点，见 JudgeRequestConsumer 的幂等说明
+      ack-mode: manual
 
 mockverse:
   judge:
@@ -18,8 +32,16 @@ mockverse:
     max-output-bytes: 8000
     max-code-length: 20000
     max-concurrent: 2
+    kafka:
+      # 关掉后本服务只保留 MCP 同步判题（D18 路径），不连 Kafka——
+      # 这样"只想跑判题冒烟、没起 Kafka"的场景不会被消费者拖住启动
+      enabled: ${JUDGE_KAFKA_ENABLED:true}
+      request-topic: ${JUDGE_REQUEST_TOPIC:judge-request}
+      result-topic: ${JUDGE_RESULT_TOPIC:judge-result}
+      group-id: ${JUDGE_KAFKA_GROUP:judge-service}
 
 logging:
   level:
     com.mockverse.judge: INFO
     io.modelcontextprotocol: INFO
+    org.apache.kafka.clients.NetworkClient: WARN
