@@ -40,6 +40,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * 那是规范外的私有约定：任何合规客户端都调不到，而卡片里又写着 {@code streaming: true}，
  * 等于对 D17 的 RemoteA2AAgent 虚报能力。
  *
+ * <p><b>三份拷贝里唯一的有意差异</b>：resume-service 版多一个 {@code resolveUserIdFromText}
+ * （把正文开头的 {@code [userId=N]} 标记翻译成 {@code params.metadata.userId}，D16 二十二查）。
+ * 原因是 ADK 的 {@code RemoteA2AAgent} 没有传 metadata 的路径，而简历诊断必须归档到真实
+ * 用户名下；本服务与 knowledge-service 的 A2A 调用不需要用户身份，所以不跟。
+ * **从 resume 版往这里同步时，把那个方法删掉；反向同步时，别把它带过来。**
+ *
  * <p><b>序列化用 {@link Utils#OBJECT_MAPPER} 而不是 Spring 的 ObjectMapper</b>：
  * spec 记录类上的 Jackson 注解（多态 part、kind 判别器）是按 SDK 的 mapper 配置设计的，
  * 换一个 mapper 容易漏模块。返回值直接给 String，避免 Spring 二次序列化。

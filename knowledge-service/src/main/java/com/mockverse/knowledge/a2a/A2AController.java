@@ -37,6 +37,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * 有意的（服务独立可构建），代价是改一处必须同步三处，清单见
  * {@link A2AServerConfig} 的类注释。
  *
+ * <p><b>三份拷贝里唯一的有意差异</b>：resume-service 版多一个 {@code resolveUserIdFromText}
+ * （把正文开头的 {@code [userId=N]} 标记翻译成 {@code params.metadata.userId}，D16 二十二查）。
+ * 原因是 ADK 的 {@code RemoteA2AAgent} 没有传 metadata 的路径，而简历诊断必须归档到真实
+ * 用户名下；本服务与 interview-service 的 A2A 调用不需要用户身份，所以不跟。
+ * **从 resume 版往这里同步时，把那个方法删掉；反向同步时，别把它带过来。**
+ *
  * <p><b>所有方法共用 AgentCard.url 一个端点</b>（D16 六查修正）：A2A 的方法名在 JSON-RPC
  * 信封里，不在路径上。a2a SDK 的 {@code JSONRPCTransport} 实测就是这么做——{@code message/send}
  * 与 {@code message/stream} 都 POST 到 {@code agentCard.url()}，只有 {@code method} 字段不同

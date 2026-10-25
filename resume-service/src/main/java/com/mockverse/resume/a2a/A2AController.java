@@ -5,10 +5,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.a2a.server.requesthandlers.DefaultRequestHandler;
 import io.a2a.spec.InvalidParamsError;
 import io.a2a.spec.JSONRPCError;
+import io.a2a.spec.Message;
 import io.a2a.spec.MessageSendParams;
+import io.a2a.spec.Part;
 import io.a2a.spec.StreamingEventKind;
 import io.a2a.spec.TaskIdParams;
 import io.a2a.spec.TaskQueryParams;
+import io.a2a.spec.TextPart;
 import io.a2a.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -20,8 +23,14 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A2A 传输层：AgentCard 发现 + JSON-RPC 端点（D16）。
@@ -44,6 +53,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * 那是规范外的私有约定：任何合规客户端都调不到，而卡片里又写着 {@code streaming: true}，
  * 等于对 D17 的 RemoteA2AAgent 虚报能力。
  *
+ * <p><b>与 interview-service / knowledge-service 的同名文件只有一处有意差异</b>：
+ * {@link #resolveUserIdFromText} 这个"正文 userId 标记"适配只有本服务需要——简历诊断要
+ * 归档到真实用户名下，另外两个服务的 A2A 调用不需要用户身份。其余逐字相同，同步时别把它
+ * 误删/误拷。
+ *
  * <p><b>序列化用 {@link Utils#OBJECT_MAPPER} 而不是 Spring 的 ObjectMapper</b>：
  * spec 记录类上的 Jackson 注解（多态 part、kind 判别器）是按 SDK 的 mapper 配置设计的，
  * 换一个 mapper 容易漏模块。返回值直接给 String，避免 Spring 二次序列化。
@@ -54,6 +68,18 @@ public class A2AController {
 
     private static final String METHOD_SEND = "message/send";
     private static final String METHOD_STREAM = "message/stream";
+
+    /**
+     * 消息正文开头的 userId 声明标记，如 {@code [userId=1]}。
+     *
+     * <p>用方括号包起来而不是裸写 {@code userId=1}：简历原文里几乎不可能出现这个形状，
+     * 误判概率趋近于零；裸写法在简历恰好含 "userId=..." 时会静默归档到错误的用户——
+     * 这种错不会报错，只会让某人的诊断记录消失，是最难查的一类。
+     *
+     * <p>只匹配正文**开头**（{@code ^}，非 multiline），进一步把误伤面压到最小。
+     */
+    private static final Pattern LEADING_USER_ID =
+            Pattern.compile("^\\s*\\[userId\\s*=\\s*(\\d+)]\\s*");
 
     private final DefaultRequestHandler requestHandler;
     private final io.a2a.spec.AgentCard agentCard;
@@ -99,7 +125,7 @@ public class A2AController {
         try {
             Object result = switch (method) {
                 case METHOD_SEND -> requestHandler.onMessageSend(
-                        parse(params, MessageSendParams.class), null);
+                        resolveUserIdFromText(parse(params, MessageSendParams.class)), null);
                 case "tasks/get" -> requestHandler.onGetTask(
                         parse(params, TaskQueryParams.class), null);
                 case "tasks/cancel" -> requestHandler.onCancelTask(
@@ -150,7 +176,7 @@ public class A2AController {
         emitter.onError(t -> cancelUpstream.run());
 
         try {
-            MessageSendParams sendParams = parse(params, MessageSendParams.class);
+            MessageSendParams sendParams = resolveUserIdFromText(parse(params, MessageSendParams.class));
             requestHandler.onMessageSendStream(sendParams, null).subscribe(new Flow.Subscriber<>() {
                 @Override
                 public void onSubscribe(Flow.Subscription s) {
@@ -221,6 +247,75 @@ public class A2AController {
             throw new InvalidParamsError("params 不能为空");
         }
         return value;
+    }
+
+    /**
+     * 把"正文开头的 {@code [userId=123]} 标记"翻译成 {@code params.metadata.userId}（D16 二十一查）。
+     *
+     * <p><b>为什么需要这一层</b>：D17 用 ADK 的 {@code RemoteA2AAgent} 代用户调用本服务，
+     * 而它**没有传 metadata 的路径**——{@code prepareMessage()} 自己拼 {@link Message} 且不设
+     * metadata，调的是不带 metadata 的 {@code sendMessage} 重载；客户端这侧的 metadata 又只来自
+     * {@code ClientConfig}（构造 {@code Client} 时固定）。也就是说"按规范传 metadata"这条路，
+     * 在 ADK 1.13.0 的客户端里走不通（实证见 docs/journal/D16-2026-11-06.md 10.7）。
+     *
+     * <p>所以改成<b>正文约定</b>：调用方在消息最前面写一行 {@code [userId=123]}，本类解析后
+     * 补进 {@code params.metadata} 再交给 {@code DefaultRequestHandler}——下游
+     * {@code ResumeTools.resolveUserId} 读的仍是 {@code a2a_metadata}，一行都不用改。
+     *
+     * <p><b>标记会被剥离</b>，不进模型视野：否则模型可能把它当简历原文的一部分传给
+     * {@code diagnose_resume}，污染长度校验与 quote 逐字校验（D11 三层防线）。
+     *
+     * <p><b>显式 metadata 优先</b>：调用方已经传了 {@code metadata.userId} 时（curl 测试、
+     * 将来别的客户端），只剥离正文标记、不覆盖 metadata——显式声明永远比正文约定可信。
+     *
+     * <p>没有标记、标记格式不对、或消息里没有文本 part 时<b>原样返回</b>：下游会回落到
+     * 默认用户 0 并打 WARN（D16 坑 5 的既有行为），不在这里抛异常——A2A 端点不能因为
+     * 少一个归档字段就把整次诊断打掉。
+     */
+    private static MessageSendParams resolveUserIdFromText(MessageSendParams params) {
+        Message message = params.message();
+        if (message == null || message.getParts() == null) {
+            return params;
+        }
+        List<Part<?>> parts = message.getParts();
+        for (int i = 0; i < parts.size(); i++) {
+            if (!(parts.get(i) instanceof TextPart textPart) || textPart.getText() == null) {
+                continue;
+            }
+            Matcher matcher = LEADING_USER_ID.matcher(textPart.getText());
+            if (!matcher.find()) {
+                continue;
+            }
+            // group(1) 必须在 replaceFirst 之前取：replaceFirst 会重置 matcher 的匹配状态
+            String declaredUserId = matcher.group(1);
+            String strippedText = matcher.replaceFirst("");
+
+            List<Part<?>> strippedParts = new ArrayList<>(parts);
+            Map<String, Object> partMetadata = textPart.getMetadata();
+            strippedParts.set(i, partMetadata == null
+                    ? new TextPart(strippedText)
+                    : new TextPart(strippedText, partMetadata));
+
+            Map<String, Object> metadata = params.metadata();
+            if (metadata != null && metadata.get("userId") != null) {
+                log.debug("正文带 userId 标记但 metadata 已声明 userId={}，以 metadata 为准",
+                        metadata.get("userId"));
+            } else {
+                Map<String, Object> merged = metadata == null
+                        ? new LinkedHashMap<>()
+                        : new LinkedHashMap<>(metadata);
+                merged.put("userId", declaredUserId);
+                metadata = merged;
+                log.info("A2A 请求正文声明 userId={}，已补进 params.metadata", declaredUserId);
+            }
+
+            return new MessageSendParams.Builder()
+                    .message(new Message.Builder(message).parts(strippedParts).build())
+                    .configuration(params.configuration())
+                    .metadata(metadata)
+                    .build();
+        }
+        return params;
     }
 
     private static ResponseEntity<String> json(String body) {
