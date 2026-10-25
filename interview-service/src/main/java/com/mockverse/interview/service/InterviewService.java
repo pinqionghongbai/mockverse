@@ -179,9 +179,14 @@ public class InterviewService {
 
     /**
      * 工具调用信号（D19）：{@code judge_code} 要 0.6~10s，这段时间客户端只看到空白，
-     * 会以为卡死。前端收到就显示"正在判题…"，拿到第一段 chunk 再撤掉。
+     * 会以为卡死。前端收到就显示"正在判题…"。
+     *
+     * <p><b>撤销时机</b>（三查补）：收到**任意后续事件**（chunk / done / error）或流关闭
+     * 时撤掉——不能只等第一段 chunk。判题超时或工具失败时不会再有文字，只发一个
+     * {@link ErrorEvent}，按"等 chunk"写会让提示一直挂着。
      *
      * <p>只报**工具名**，不报参数——参数里是候选人完整代码，没必要重复推一遍。
+     * 消费端遇到不认识的事件类型应忽略而不是报错（新增事件类型属于契约扩展）。
      */
     public record ToolEvent(String author, String tool) implements StreamEvent {}
 
