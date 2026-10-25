@@ -51,7 +51,9 @@ mockverse:
     # 面试流程照常走；服务起不来时由 ResilientMcpToolset 降级，不会拖垮整轮对话
     enabled: ${JUDGE_MCP_ENABLED:true}
     url: ${JUDGE_SERVICE_URL:http://localhost:8084/mcp}
-    # 握手超时。ADK 默认 5 分钟——判题服务没起时每轮都要挂 5 分钟，这里压到 10s
+    # 握手超时。ADK 的 StreamableHttpServerParameters 默认 timeout=30s、readTimeout=5min，
+    # McpToolset 内部还会重试 3 次——服务挂死（接受连接不响应）时最坏 3×30s 起步。
+    # 判题服务没起（连接拒绝）时是快速失败，实测整轮 5.7s。这里压到 10s
     init-timeout: ${JUDGE_MCP_INIT_TIMEOUT:10s}
     # 单次 judge_code 调用上限：判题服务自身 10s 运行 + 20s 编译 + 排队，45s 留足余量
     request-timeout: ${JUDGE_MCP_REQUEST_TIMEOUT:45s}
