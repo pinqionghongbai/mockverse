@@ -56,7 +56,7 @@ curl -s http://localhost:8084/health; echo
 curl -s -X POST "http://localhost:8081/api/interview/start?userId=1&category=JAVA_BASIC"
 # 记下 sessionId，然后：
 curl -N -X POST "http://localhost:8081/api/interview/<sessionId>/answer/stream" \
-  -H "Content-Type: application/json" --data-binary @answer.json
+  -H "Content-Type: application/json" --data-binary @docs/evidence/D22/fixtures/answer.json
 ```
 
 **画面重点**：终端逐字蹦出（每秒十几个 chunk）。
@@ -69,7 +69,7 @@ curl -N -X POST "http://localhost:8081/api/interview/<sessionId>/answer/stream" 
 ```bash
 # knowledge.json = {"answer":"先不答题，我想先问个知识：索引什么时候会失效？"}
 curl -s -X POST "http://localhost:8081/api/interview/<sessionId>/answer" \
-  -H "Content-Type: application/json" --data-binary @knowledge.json
+  -H "Content-Type: application/json" --data-binary @docs/evidence/D22/fixtures/knowledge.json
 ```
 
 **口播**："coordinator 判断这是知识问题，通过 **A2A 协议**转给另一个进程的知识库 Agent
@@ -90,7 +90,7 @@ grep "远端\|knowledge_agent" .demo-knowledge-service.log | tail -3
 curl -s -X POST "http://localhost:8081/api/interview/start?userId=1&category=ALGORITHM"
 # 提交一段"少迭代一次"的斐波那契代码
 curl -N -X POST "http://localhost:8081/api/interview/<sessionId>/answer/stream" \
-  -H "Content-Type: application/json" --data-binary @code-wrong.json
+  -H "Content-Type: application/json" --data-binary @docs/evidence/D22/fixtures/code-wrong.json
 ```
 
 **画面重点**：流里先出现 `{"author":"interviewer_agent","tool":"judge_code"}`，界面显示
@@ -104,15 +104,10 @@ curl -N -X POST "http://localhost:8081/api/interview/<sessionId>/answer/stream" 
 所以界面不会假死。注意它说的话：'实际输出 34，与样例 55 不符，循环少迭代了一次'——
 **指出了错在哪，但没有把答案写出来**。"
 
-**`code-wrong.json` 的内容**（D22 实测：这段必须**真的错**才演得出来）：
-
-```json
-{"answer": "写好了：\nimport java.util.Scanner;\npublic class Fib {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int n = sc.nextInt();\n        long a = 0, b = 1;\n        for (int i = 2; i < n; i++) { long t = a + b; a = b; b = t; }\n        System.out.println(n <= 2 ? 1 : b);\n    }\n}\n输入 10 输出 55"}
-```
-
-> ⚠️ **别把 `a = 0, b = 1` 写成 `a = 1, b = 1`**（D22 踩过）：改初值后循环次数正好补上缺的那一次，
-> 输出真的等于 55，判题会返回 `matched=true`，整段演示就演成了"代码正确"。
-> 判据看 8084 日志的 `matched=` 字段，不是看代码像不像错的。
+> **三个请求体都已归档**在 `docs/evidence/D22/fixtures/`（`answer.json` / `knowledge.json` /
+> `code-wrong.json`），直接 `--data-binary @docs/evidence/D22/fixtures/xxx.json`，不用自己拼。
+> `code-wrong.json` 必须是"**真的错**"的那一版（`a=0,b=1` + `i<n`）——写成 `a=1,b=1`
+> 就变成正确代码了（n=10 输出 55，`matched=true`），详见该目录 README 的 ⚠️ 说明。
 
 **佐证镜头**（切到 8084 日志）：
 ```bash
@@ -151,7 +146,7 @@ grep "重复消息，跳过判题" .demo-judge-service.log | tail -2
 
 ```bash
 curl -s -X POST "http://localhost:8081/api/interview/<sessionId>/answer" \
-  -H "Content-Type: application/json" --data-binary @answer2.json
+  -H "Content-Type: application/json" --data-binary @docs/evidence/D22/fixtures/answer2.json
 ```
 
 **口播**："进程内存里的会话没了，但面试还能接着聊——历史在 MySQL，每轮回放重建上下文。"

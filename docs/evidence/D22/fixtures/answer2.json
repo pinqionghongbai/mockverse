@@ -1,0 +1,1 @@
+{"answer": "MVCC 靠 undo log 版本链 + ReadView 判断可见性"}

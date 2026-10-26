@@ -1,0 +1,1 @@
+{"answer": "写好了：\nimport java.util.Scanner;\npublic class Fib {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        int n = sc.nextInt();\n        long a = 0, b = 1;\n        for (int i = 2; i < n; i++) { long t = a + b; a = b; b = t; }\n        System.out.println(n <= 2 ? 1 : b);\n    }\n}\n输入 10 输出 55"}
