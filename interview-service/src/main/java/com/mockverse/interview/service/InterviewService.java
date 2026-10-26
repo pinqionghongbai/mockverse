@@ -230,8 +230,11 @@ public class InterviewService {
         String lockToken = sessionLock.tryAcquire(sessionId);
         try {
             return answerStreamLocked(sessionId, userAnswer)
-                    // doFinally 覆盖 onComplete / onError / dispose 三种终止。
-                    // 客户端中途断开（dispose）也必须解锁，否则会话锁要等 180s 自然过期。
+                    // doFinally 在 onComplete / onError / dispose 三种终止上都会执行。
+                    // 但**实际生效的是前两种**：InterviewController 在客户端断开时只记日志、
+                    // 不 dispose 订阅（刻意的，为了让 defer 里的落库照常跑完），所以"断开"
+                    // 最终仍以 onComplete 收尾。dispose 分支是防御性的，不是主路径。
+                    // D23 实测：curl --max-time 1 断开后，锁在 t+1s 仍持有、t+2s 已释放。
                     .doFinally(() -> sessionLock.release(sessionId, lockToken));
         } catch (RuntimeException e) {
             // 订阅前抛错（会话不存在 400 / 已结束 409 / 回放失败）时流还没建立，

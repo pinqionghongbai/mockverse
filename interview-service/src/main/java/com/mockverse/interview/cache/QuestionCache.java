@@ -113,10 +113,23 @@ public class QuestionCache {
         }
     }
 
-    /** 键里带上分类与难度，未指定的维度用 {@code *} 占位（与 SQL 的"不过滤"同义）。 */
+    /**
+     * 键的构造：每个维度要么是"不过滤"标记，要么是 {@code eq:<原值>}。
+     *
+     * <p><b>为什么不能拿 {@code *} 当"不过滤"的占位符</b>（D23 复查实测）：{@code category}
+     * 是**用户可控的请求参数**。原实现把 null/blank 编码成 {@code *}，于是
+     * {@code POST /start?category=*} 算出的键与"完全不过滤"**完全相同**，直接命中
+     * 全量候选集缓存 —— 请求明明指定了一个不存在的分类（本应返回 409），却拿到一道随机题。
+     * 缓存改变了业务语义，这是缓存层最不该犯的错。
+     *
+     * <p>用前缀区分后不可能撞：不过滤是裸的 {@code any}，带过滤的永远以 {@code eq:} 开头，
+     * 两者字符串不可能相等；而 {@code eq:} 后面的原值可以包含任何字符。
+     */
     private static String key(String category, String difficulty) {
-        return KEY_PREFIX
-                + (category == null || category.isBlank() ? "*" : category) + ":"
-                + (difficulty == null || difficulty.isBlank() ? "*" : difficulty);
+        return KEY_PREFIX + dim(category) + ":" + dim(difficulty);
+    }
+
+    private static String dim(String value) {
+        return value == null || value.isBlank() ? "any" : "eq:" + value;
     }
 }

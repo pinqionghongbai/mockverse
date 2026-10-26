@@ -19,8 +19,13 @@ import java.util.List;
  * 迟早有人漏掉一个分支，Redis 一抖整条面试链路就 500。
  *
  * <p><b>失败冷却</b>：与 {@code ResilientMcpToolset} 的 failure-cooldown 同一套思路。
- * Redis 宕机时每个请求都去连一次，要白等满 {@code connect-timeout}；实测 Lettuce
- * 默认超时是 10s，足以把面试拖死。这里在首次失败后 30s 内直接短路，不碰连接。
+ * Redis 宕机时每个请求都去连一次，要白等满超时；所以 yml 里把
+ * {@code spring.data.redis.timeout / connect-timeout} 压到 2s（Lettuce 的默认命令超时
+ * 比这长得多），再叠一层"首次失败后 30s 内直接短路、不碰连接"。
+ * D23 实测：停容器后首次 start 6.17s（含一次 2s 超时 + 一次 LLM），冷却窗口内的第二次 2.72s。
+ *
+ * <p><b>唯一的例外是 {@link #unlock}</b>：释放锁是正确性操作，冷却期内也必须尝试，
+ * 否则锁要挂到 TTL 自然过期，用户看到的是"这个会话卡住了"。详见该方法注释。
  *
  * <p><b>降级是可观测的</b>：冷却窗口内每次短路都不打日志（会刷屏），只在进入冷却时
  * WARN 一次。调用方拿到的返回值语义明确（{@code null} / {@code -1} / {@link LockResult#UNAVAILABLE}），
@@ -136,8 +141,11 @@ public class RedisGateway {
      * 按模式删除键（用 SCAN 游标，不用 KEYS）。
      *
      * <p>{@code KEYS} 在大键空间下会阻塞 Redis 单线程，是明确的生产禁忌；
-     * 即使本项目的键空间很窄，也不给后来者留下坏样例。SCAN 的语义是"可能重复返回"，
-     * 对删除操作无害（重复删同一个键不报错）。
+     * 即使本项目的键空间很窄，也不给后来者留下坏样例。
+     *
+     * <p><b>必须先收集再删除</b>：Redis 官方文档对 SCAN 的约束是"迭代期间增删元素行为未定义"，
+     * 边扫边删可能漏掉键。漏掉的后果是那条缓存活到 TTL（10 分钟）——补种后抽不到新题。
+     * 收集到内存再批量删，代价是几十个字符串，换确定性。
      */
     public void deleteByPattern(String pattern) {
         if (!available()) {
@@ -145,19 +153,28 @@ public class RedisGateway {
         }
         try (Cursor<String> cursor = redis.scan(
                 ScanOptions.scanOptions().match(pattern).count(100).build())) {
+            List<String> keys = new java.util.ArrayList<>();
             while (cursor.hasNext()) {
-                redis.delete(cursor.next());
+                keys.add(cursor.next());
+            }
+            if (!keys.isEmpty()) {
+                redis.delete(keys);
             }
         } catch (RuntimeException e) {
             degrade("SCAN " + pattern, e);
         }
     }
 
-    /** 释放锁（仅当 token 匹配）。重复释放、锁已过期都安全。 */
+    /**
+     * 释放锁（仅当 token 匹配）。重复释放、锁已过期都安全。
+     *
+     * <p><b>这里刻意不看冷却窗口</b>（与 get/set/incr 不同）：释放锁是**正确性操作**，
+     * 不是加速器。若在冷却期内跳过，锁会一直留到 TTL 自然过期（180s）——这期间 Redis
+     * 恢复了的话，同会话的请求全部 409，用户看到的是"这个会话卡住了"。
+     * 代价是 Redis 宕机时每个持有过锁的请求多付一次 2s 连接超时，而这种情况本来就少
+     * （冷却期内新请求根本拿不到锁，token 为 null，{@link SessionLock#release} 直接返回）。
+     */
     public void unlock(String key, String token) {
-        if (!available()) {
-            return;
-        }
         try {
             redis.execute(UNLOCK_IF_OWNER, List.of(key), token);
         } catch (RuntimeException e) {

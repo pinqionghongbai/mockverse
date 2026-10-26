@@ -28,15 +28,15 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
+      # 命令超时与连接超时都压到 2s：Redis 宕机时 health/缓存回源最多等 2s，
+      # 不会像 MCP 工具那样默认 30s 把请求拖死（D23 实测：停容器后 start 6.17s 含一次 2s 超时）
       timeout: 2s
       connect-timeout: 2s
-      lettuce:
-        pool:
-          # 并发面试时每条 SSE 流都会持有连接（锁/限流各一次往返，用完即还）
-          max-active: 16
-          max-idle: 8
-          min-idle: 0
-          max-wait: 1s
+      # 刻意**不配** lettuce.pool：Spring Boot 的 Lettuce 连接池是
+      # @ConditionalOnClass(GenericObjectPool.class) 的，而 commons-pool2 不在依赖里
+      # （spring-boot-starter-data-redis 不传递它，D23 用 dependency:tree 确认 0 命中）。
+      # 写了 pool 配置也不会生效，只会让下一个人以为连接池在起作用——D23 二查把这段删了。
+      # Lettuce 默认是单条 native 连接多路复用，本项目并发量（单人面试、几条 SSE）远不到需要池化的程度。
   kafka:
     # D20: 单节点 KRaft Kafka（容器名 mockverse-kafka，映射 9092）
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
