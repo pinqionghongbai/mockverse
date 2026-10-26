@@ -121,10 +121,12 @@ public class ResilientMcpToolset implements BaseToolset {
      * {@code loadTimeout}（与 D18 的 {@code .timeout()} 同一个量级）。
      */
     private List<BaseTool> loadTools(ReadonlyContext readonlyContext) throws Exception {
-        if (warmed) {
-            return delegate.getTools(readonlyContext).toList().blockingGet();
-        }
-        Future<List<BaseTool>> future = LOADER.submit(() -> loadCold(readonlyContext));
+        // 冷启动与热路径都走 LOADER：热路径虽然通常只有一次毫秒级 listTools()，但它是**网络调用**，
+        // 判题服务假死（接受连接不响应）时会永久阻塞。D18 的 .timeout() 原本覆盖两条路径，
+        // D21 改成同步后如果不加回来，就等于把"整体超时"这一层防护悄悄丢了（二查修正）。
+        Future<List<BaseTool>> future = LOADER.submit(() ->
+                warmed ? delegate.getTools(readonlyContext).toList().blockingGet()
+                       : loadCold(readonlyContext));
         try {
             return future.get(loadTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
