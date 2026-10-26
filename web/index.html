@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MockVerse · AI 模拟面试</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">M</span>
+    <div>
+      <h1>MockVerse</h1>
+      <p class="sub">AI 模拟面试陪练</p>
+    </div>
+  </div>
+
+  <div class="session-info" id="sessionInfo" hidden>
+    <span class="chip" id="chipRound">第 0 / 5 轮</span>
+    <span class="chip" id="chipTopic">—</span>
+    <button class="btn-ghost" id="btnNew">换一场</button>
+  </div>
+
+  <div class="status" id="status">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">正在连接…</span>
+  </div>
+</header>
+
+<main id="app">
+
+  <!-- 欢迎 / 开局面板 -->
+  <section class="welcome" id="welcome">
+    <h2>开始一场模拟面试</h2>
+    <p class="lead">
+      面试官会根据题库出题、追问你的回答。你也可以随时问技术知识，
+      或者把代码贴进来让系统判题。
+    </p>
+
+    <div class="start-form">
+      <label>
+        <span>题目方向</span>
+        <select id="selCategory">
+          <option value="">随机（全部方向）</option>
+          <option value="JAVA_BASIC">Java 基础</option>
+          <option value="JVM">JVM</option>
+          <option value="MYSQL">MySQL</option>
+          <option value="REDIS">Redis</option>
+          <option value="SPRING">Spring</option>
+          <option value="ALGORITHM">算法</option>
+        </select>
+      </label>
+
+      <label>
+        <span>难度</span>
+        <select id="selDifficulty">
+          <option value="">随机</option>
+          <option value="EASY">简单</option>
+          <option value="MEDIUM">中等</option>
+          <option value="HARD">困难</option>
+        </select>
+      </label>
+
+      <button class="btn-primary" id="btnStart">开始面试</button>
+    </div>
+
+    <p class="hint" id="startHint"></p>
+  </section>
+
+  <!-- 对话区 -->
+  <section class="chat" id="chat" hidden>
+    <div class="messages" id="messages"></div>
+
+    <!-- 判题面板（可折叠） -->
+    <div class="judge-panel" id="judgePanel">
+      <button class="judge-toggle" id="judgeToggle">
+        <span>代码判题</span>
+        <span class="chev" id="judgeChev">▾</span>
+      </button>
+      <div class="judge-body" id="judgeBody" hidden>
+        <p class="judge-tip">
+          贴一段 Java 代码，系统会真实编译并运行。填了「期望输出」才能判断对错；
+          只填代码则给你编译与运行结果。
+        </p>
+        <label>
+          <span>代码</span>
+          <textarea id="taCode" rows="8" spellcheck="false"
+            placeholder="public class Main {&#10;    public static void main(String[] args) {&#10;        System.out.println(&quot;hello&quot;);&#10;    }&#10;}"></textarea>
+        </label>
+        <div class="judge-row">
+          <label class="half">
+            <span>标准输入（可选）</span>
+            <textarea id="taStdin" rows="3" spellcheck="false" placeholder="程序运行时从 stdin 读入的内容"></textarea>
+          </label>
+          <label class="half">
+            <span>期望输出（可选）</span>
+            <textarea id="taExpected" rows="3" spellcheck="false" placeholder="填了才会判对错"></textarea>
+          </label>
+        </div>
+        <div class="judge-actions">
+          <button class="btn-primary" id="btnJudge">提交判题</button>
+          <span class="judge-status" id="judgeStatus"></span>
+        </div>
+        <pre class="judge-result" id="judgeResult" hidden></pre>
+      </div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="composer">
+      <textarea id="taAnswer" rows="2"
+        placeholder="输入你的回答，或问一个技术问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button class="btn-primary" id="btnSend">发送</button>
+    </div>
+    <p class="hint" id="composerHint"></p>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

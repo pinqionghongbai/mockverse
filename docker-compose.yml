@@ -237,7 +237,9 @@ services:
     container_name: mockverse-judge
     environment:
       TZ: Asia/Shanghai
-      JAVA_TOOL_OPTIONS: "-Xmx192m"
+      # 不用 JAVA_TOOL_OPTIONS：它会被判题时派生的 javac/java 子进程继承，
+      # 往 stderr 打 "Picked up JAVA_TOOL_OPTIONS: ..."，污染程序输出（D25 发现）
+      MOCKVERSE_HEAP: "192m"
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       NACOS_SERVER_ADDR: nacos:8848
     ports:
@@ -314,6 +316,8 @@ services:
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/nginx/proxy-common.conf:/etc/nginx/conf.d/proxy-common.conf:ro
+      # D25 前端：挂载而不是 COPY 进镜像——改一行刷新就生效，演示迭代期不用重建
+      - ./web:/usr/share/nginx/html:ro
     depends_on:
       - interview-service
       - knowledge-service

@@ -17,8 +17,16 @@ WORKDIR /app
 ARG JAR_FILE
 COPY ${JAR_FILE} /app/app.jar
 
-# 判题是内存大户（每次 javac + java 子进程），默认堆给得最保守
-ENV JAVA_TOOL_OPTIONS="-Xmx192m"
+# 判题是内存大户（每次 javac + java 子进程），默认堆给得最保守。
+#
+# **刻意不用 JAVA_TOOL_OPTIONS**（D25 发现）：那是个会被**所有** JVM 进程继承的环境变量，
+# 包括判题时派生的 javac / java 子进程——它们启动时会往 stderr 打一行
+# `Picked up JAVA_TOOL_OPTIONS: -Xmx192m`，污染候选人的程序输出。
+# 实测：容器里 `java -version` 就会打这一行，判题结果的 stderr 字段里也有。
+#
+# 改用一个自定义变量，只给**服务进程**传堆参数，子进程不继承。
+# 子进程的堆由 JavaJudge 自己用 `-Xmx{max-heap-mb}m` 显式指定（默认 256m）。
+ENV MOCKVERSE_HEAP=192m
 ENV TZ=Asia/Shanghai
 
 # 判题工作目录（每次判题建独立子目录、结束即删）。
@@ -31,4 +39,4 @@ ENV MOCKVERSE_JUDGE_WORK_ROOT=/tmp/mockverse-judge
 
 EXPOSE 8084
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_TOOL_OPTIONS -jar /app/app.jar"]
+ENTRYPOINT ["sh", "-c", "exec java -Xmx${MOCKVERSE_HEAP} -jar /app/app.jar"]

@@ -50,6 +50,9 @@ docker compose ps                # 都 healthy 后访问 http://localhost
 统一入口是 **80 端口的 Nginx**：`/api/interview/*` → 8081、`/api/knowledge/*` → 8082、
 `/api/resume/*` → 8083、`/a2a/*` → 8081。详见 `docs/deploy-d24.md`。
 
+**浏览器打开 `http://localhost/` 就是前端**（D25）：开会话 → 对话看流式输出 → 贴代码判题。
+前端是零依赖静态页（`web/`），由 Nginx 直接托管，没有构建步骤。
+
 > 宿主机 `java -jar` 的启动方式（D15-D23 的流程）仍然可用，见 `STATUS.md` 第六节 6.4。
 
 ## 安全须知
@@ -69,6 +72,7 @@ mockverse/
 ├── knowledge-service/   # 8082 RAG 知识库 Agent（pgvector 直连）
 ├── resume-service/      # 8083 简历诊断 Agent
 ├── judge-service/       # 8084 MCP 判题 Server（javac/java）+ Kafka 判题消费者
+├── web/                 # D25: 前端（零依赖静态页，Nginx 托管在 80 端口）
 ├── docker/              # D24: 服务 Dockerfile（通用 JRE + judge 专用 JDK）/ nginx / pg init
 ├── docker-compose.yml   # D24: 一键拉起（五基础设施 + 四服务 + Nginx）
 ├── dev.env              # 宿主机模式的库连接（被 .gitignore 排除，勿提交）

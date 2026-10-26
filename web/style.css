@@ -1,0 +1,343 @@
+/* MockVerse 前端样式（D25）
+ *
+ * 设计取向：**一屏内看懂**。不追求视觉效果，追求"非技术朋友点两下就知道干什么"。
+ * 因此：大字号、明确的中文标签、每处操作旁边都有说明文字、不做花哨动效。
+ */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1e222b;
+  --border: #2a2f3a;
+  --text: #e6e8ee;
+  --text-dim: #9aa3b2;
+  --accent: #4f8cff;
+  --accent-dim: #2f5bb0;
+  --ok: #3ecf8e;
+  --warn: #f5a623;
+  --err: #ff5d5d;
+  --user-bubble: #24344f;
+  --agent-bubble: #1e222b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  /* 16px 起步：录屏/演示时字号太小会看不清（D22 脚本里的经验） */
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* ---------------- 顶栏 ---------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.logo {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  background: linear-gradient(135deg, var(--accent), #7b5cff);
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 20px;
+  color: #fff;
+}
+
+.brand h1 { font-size: 18px; margin: 0; line-height: 1.2; }
+.brand .sub { margin: 0; font-size: 13px; color: var(--text-dim); }
+
+.session-info {
+  display: flex; align-items: center; gap: 10px;
+  margin-left: 12px;
+}
+
+.chip {
+  padding: 4px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 14px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.status {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--text-dim);
+  transition: background .2s;
+}
+.dot.online { background: var(--ok); }
+.dot.offline { background: var(--err); }
+.dot.busy { background: var(--warn); animation: pulse 1s infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+/* ---------------- 主区 ---------------- */
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+}
+
+/* ---------------- 欢迎面板 ---------------- */
+
+.welcome { padding-top: 40px; }
+.welcome h2 { font-size: 26px; margin: 0 0 12px; }
+.lead { color: var(--text-dim); margin: 0 0 28px; max-width: 600px; }
+
+.start-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.start-form label { display: flex; flex-direction: column; gap: 6px; }
+.start-form label > span { font-size: 13px; color: var(--text-dim); }
+
+select, textarea, input {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+}
+select:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; width: 100%; }
+textarea#taCode, textarea#taStdin, textarea#taExpected {
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 14px;
+}
+
+/* ---------------- 按钮 ---------------- */
+
+.btn-primary, .btn-ghost {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) { background: #3d7aef; }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  font-size: 14px;
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* ---------------- 对话 ---------------- */
+
+.chat { display: flex; flex-direction: column; gap: 16px; }
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 200px;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 86%;
+}
+
+.msg .who {
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+
+.msg .bubble {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--agent-bubble);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.user .bubble { background: var(--user-bubble); border-color: #33507a; }
+
+.msg.system .bubble {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* 流式输出中的光标 */
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1.1em;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink .9s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 正在判题提示 */
+.tool-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(245, 166, 35, .12);
+  border: 1px solid rgba(245, 166, 35, .35);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 14px;
+  align-self: flex-start;
+}
+.tool-hint .spinner {
+  width: 12px; height: 12px;
+  border: 2px solid rgba(245,166,35,.3);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------------- 判题面板 ---------------- */
+
+.judge-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.judge-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.judge-toggle:hover { background: var(--panel-2); }
+.judge-toggle .chev { color: var(--text-dim); transition: transform .2s; }
+.judge-toggle.open .chev { transform: rotate(180deg); }
+
+.judge-body {
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.judge-tip { margin: 0; font-size: 14px; color: var(--text-dim); }
+.judge-body label { display: flex; flex-direction: column; gap: 6px; }
+.judge-body label > span { font-size: 13px; color: var(--text-dim); }
+
+.judge-row { display: flex; gap: 14px; }
+.judge-row .half { flex: 1; min-width: 0; }
+
+.judge-actions { display: flex; align-items: center; gap: 14px; }
+.judge-status { font-size: 14px; color: var(--text-dim); }
+.judge-status.ok { color: var(--ok); }
+.judge-status.err { color: var(--err); }
+.judge-status.warn { color: var(--warn); }
+
+.judge-result {
+  margin: 0;
+  padding: 14px;
+  background: #0b0d11;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---------------- 输入区 ---------------- */
+
+.composer {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 12px 0;
+}
+
+.composer textarea { flex: 1; }
+.composer .btn-primary { height: 44px; }
+
+.hint {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 8px 0 0;
+  min-height: 18px;
+}
+.hint.err { color: var(--err); }
+
+/* ---------------- 小屏 ---------------- */
+
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; gap: 10px; }
+  .session-info { margin-left: 0; width: 100%; }
+  .judge-row { flex-direction: column; }
+  .msg { max-width: 95%; }
+}
