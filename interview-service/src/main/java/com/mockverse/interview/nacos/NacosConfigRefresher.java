@@ -71,7 +71,10 @@ public class NacosConfigRefresher {
             }
             configService = NacosFactory.createConfigService(cfg);
 
-            // 先拉一次现值：服务启动时 Nacos 上已有的配置要立刻生效，不能等第一次变更
+            // 先拉一次现值：服务启动时 Nacos 上已有的配置要立刻生效，不能等第一次变更。
+            // 注意 Nacos 宕机时 getConfig 走的是**本地快照**（客户端把上次拉到的内容缓存在
+            // ~/nacos/config/），所以这里可能拿到"上次的配置"而不是 null——这是特性不是 bug，
+            // D23 实测：Nacos 停着启动，拉到的是快照值 5；Nacos 恢复后变更推送照常到达。
             apply(configService.getConfig(dataId, props.getGroup(), 3000), "启动拉取");
 
             configService.addListener(dataId, props.getGroup(), new AbstractListener() {
@@ -80,8 +83,10 @@ public class NacosConfigRefresher {
                     apply(configInfo, "配置变更推送");
                 }
             });
-            log.info("已订阅 Nacos 动态配置: dataId={}, group={}（改 max-rounds 后新会话即时生效）",
-                    dataId, props.getGroup());
+            // 用 getServerStatus() 而不是无条件说"已订阅"：Nacos 宕机时 addListener 仍然成功
+            // （监听器是本地注册的），此时报"已订阅"会让人以为连接是好的。
+            log.info("已订阅 Nacos 动态配置: dataId={}, group={}, serverStatus={}（改 max-rounds 后新会话即时生效）",
+                    dataId, props.getGroup(), configService.getServerStatus());
         } catch (Exception e) {
             log.warn("订阅 Nacos 动态配置失败，max-rounds 固定为本地值 {}: {}: {}",
                     interviewProperties.getMaxRounds(), e.getClass().getSimpleName(), e.getMessage());
@@ -140,6 +145,11 @@ public class NacosConfigRefresher {
         }
         int old = interviewProperties.getMaxRounds();
         interviewProperties.setMaxRounds(parsed);
+        if (old == parsed) {
+            // 值没变就别打 INFO：启动拉取时"5 -> 5"是常态，会把真正的变更淹掉
+            log.debug("Nacos 的 max-rounds 与当前值一致（{}），无需变更", parsed);
+            return;
+        }
         log.info("动态配置生效（{}）: max-rounds {} -> {}（对**新开的会话**立即生效，进行中的会话不受影响）",
                 source, old, parsed);
     }

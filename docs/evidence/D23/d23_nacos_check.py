@@ -64,13 +64,29 @@ def publish(max_rounds):
         return resp.read().decode("utf-8", "replace").strip()
 
 
-def wait_log(pattern, timeout=20):
-    """轮询日志文件，等某一行出现。返回命中的那一行（或 None）。"""
+def line_count():
+    """当前日志行数。用作"只看发布之后新增的行"的基线。"""
+    try:
+        with open(LOG_PATH, encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except FileNotFoundError:
+        return 0
+
+
+def wait_log_after(pattern, offset, timeout=25):
+    """轮询日志文件，只在**第 offset 行之后**找匹配。
+
+    为什么必须带 offset：服务启动时会做一次"启动拉取"，如果 Nacos 上的现值与本地默认值
+    不同，启动日志里就会出现一条 `max-rounds 5 -> 3`。不带基线地全文件搜索会直接命中
+    这条旧记录，于是"发布→生效"的断言在**什么都没发生**的情况下也能通过——
+    这是 D23 二查抓到的一个真问题：证据脚本比被测代码更容易骗人。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             with open(LOG_PATH, encoding="utf-8", errors="replace") as f:
-                hits = [ln.strip() for ln in f if pattern in ln]
+                hits = [ln.strip() for i, ln in enumerate(f, 1)
+                        if i > offset and pattern in ln]
             if hits:
                 return hits[-1]
         except FileNotFoundError:
@@ -103,15 +119,18 @@ def main():
                 "%s 注册了 fake-ip 地址 %s（消费者连不通）" % (svc, ip)
 
     # 3. 动态配置：改小再改回
+    # 每次发布前记下行数，之后只认新增的行（见 wait_log_after 的说明）
+    base = line_count()
     log("[3] 发布 max-rounds=3 ->", publish(3))
-    hit = wait_log("max-rounds 5 -> 3")
+    hit = wait_log_after("max-rounds 5 -> 3", base)
     log("    日志:", hit)
-    assert hit, "配置变更后 20s 内日志没有出现 'max-rounds 5 -> 3'"
+    assert hit, "配置变更后 25s 内没有出现新的 'max-rounds 5 -> 3'（只认发布之后新增的行）"
 
+    base = line_count()
     log("[3] 发布 max-rounds=5 ->", publish(5))
-    hit = wait_log("max-rounds 3 -> 5")
+    hit = wait_log_after("max-rounds 3 -> 5", base)
     log("    日志:", hit)
-    assert hit, "恢复配置后 20s 内日志没有出现 'max-rounds 3 -> 5'"
+    assert hit, "恢复配置后 25s 内没有出现新的 'max-rounds 3 -> 5'（只认发布之后新增的行）"
 
     log("== 全部通过 ==")
 

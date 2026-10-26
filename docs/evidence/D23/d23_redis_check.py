@@ -11,15 +11,20 @@ D23 Redis 三项能力验证（只依赖标准库）。
     - Redis 已起（用于观察键与 TTL，脚本本身不直连 Redis，只走 HTTP）
 
 检查项：
-    1. 题库缓存：start 之后出现 mv:question:candidates:*:* 键（打印 TTL）
+    1. start 可用（这一步**不能**证明缓存生效——见下面的"能证明什么"）
     2. 空值兜底：category=NOPE 返回 409，且缓存值是 __EMPTY__
     3. 会话锁：同一会话并发两条 answer，必须一条 200、一条 409
     4. 锁释放：随后再发一条 answer 必须 200（证明 finally 真的解锁了）
 
-关于"看 Redis 键"：脚本不引入 redis 客户端（约定只用标准库），
-所以键的观察交给调用方在 shell 里执行：
-    docker exec mockverse-redis redis-cli KEYS "mv:*"
-本脚本只负责用 HTTP 证明**行为**是对的。
+能证明什么、不能证明什么：
+    本脚本只证明**行为**（409/200 的分布），不证明**缓存命中**。
+    "缓存真的省掉了 SQL"必须看两处原始证据，脚本代替不了：
+        # a) 键与 TTL
+        docker exec mockverse-redis redis-cli KEYS  "mv:question:*"
+        docker exec mockverse-redis redis-cli TTL   "mv:question:candidates:*:*"
+        # b) 连发 3 次 start 前后的 SQL 计数（服务日志里的 MyBatis 输出）
+        grep -c "FROM question WHERE" <interview-service.log>
+    D23 实测：3 次 start 后该计数 delta=0，TTL 597。
 """
 
 import json
@@ -65,7 +70,7 @@ def main():
     log("== D23 Redis 行为验证 ==")
     log("base =", BASE)
 
-    # 1. 题库缓存（只证明 start 可用；键的存在由 shell 里的 redis-cli 观察）
+    # 1. 冒烟：start 能通（缓存命中与否见文件头的"能证明什么"）
     status, data = start(1)
     log("[1] start ->", status, "session =", data.get("sessionId") if status == 200 else data)
     assert status == 200, "start 失败，后面的检查没有意义"

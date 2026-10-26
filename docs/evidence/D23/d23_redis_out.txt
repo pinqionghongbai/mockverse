@@ -1,9 +1,0 @@
-== D23 Redis 行为验证 ==
-base = http://localhost:8081
-[1] start -> 200 session = 2114612969844342785
-[2] start(category=NOPE) -> 409
-[3] 并发 answer 打 session 2114612981751971841
-    codes = [200, 409]
-[4] 锁释放后 answer -> 200
-    round = 2
-== 全部通过 ==

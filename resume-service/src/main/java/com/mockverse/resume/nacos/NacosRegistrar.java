@@ -75,8 +75,11 @@ public class NacosRegistrar {
             log.info("已注册到 Nacos: {}:{} (server={}, group={}, ephemeral={})",
                     instance.getIp(), port, props.getServerAddr(), props.getGroup(), props.isEphemeral());
         } catch (Exception e) {
-            // 注册中心不可用不该拖垮服务本体（与题库种子的降级启动同一口径）
-            log.warn("注册到 Nacos 失败，服务继续运行（控制台看不到本实例）: {}: {}",
+            // 注册中心不可用不该拖垮服务本体（与题库种子的降级启动同一口径）。
+            // 措辞注意：Nacos 客户端的 ephemeral 实例有一套 redo 机制，注册失败的实例会被
+            // 每 3s 重试一次——所以"本次失败"≠"永远注册不上"。D23 实测：Nacos 宕机时启动，
+            // 注册抛 Client not connected；Nacos 恢复后该实例确实补注册成功了。
+            log.warn("注册到 Nacos 失败（客户端会在后台重试），服务继续运行: {}: {}",
                     e.getClass().getSimpleName(), e.getMessage());
         }
     }

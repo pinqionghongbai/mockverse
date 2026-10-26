@@ -26,3 +26,6 @@ Thumbs.db
 
 # 当日验证脚手架（脚本/报文/输出，不归档；结论写进 docs/journal）
 .d??tmp/
+
+# 证据脚本的一次性输出（docs/evidence/README.md 的归档边界）
+docs/evidence/**/*_out.txt

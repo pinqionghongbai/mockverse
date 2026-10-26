@@ -50,6 +50,16 @@ public class QuestionSeeder implements ApplicationRunner {
             // 注意不能直接给 seedMissing() 加 @Transactional——同类内部调用不走代理，注解会失效
             // （巧合的是本类第 10 道种子题讲的正是这个知识点）。
             transactionTemplate.executeWithoutResult(status -> seedMissing());
+
+            // D23: 补种后立刻清缓存。否则新题要等 question-ttl（默认 10 分钟）过期才可能被抽到——
+            // "演示前刚改过题库，结果抽不到新题"就是这么来的。只在真有新增时才清，
+            // 重启但题库无变化时不打扰 Redis。
+            //
+            // 刻意放在事务**外面**：Redis 的 SCAN + DEL 是网络 I/O，圈进事务会让 Hikari 连接
+            // 在等 Redis 时被白占；启动期虽然只有一次，但没有理由把两种资源锁在一起。
+            if (seededCount > 0) {
+                questionCache.invalidateAll();
+            }
         } catch (RuntimeException e) {
             // D15 收口后整改发现（Bug H）：MySQL 未就绪时**不能让整个进程退出**。
             // 此前 selectCount 直接抛出 → SpringApplication "Application run failed" → 进程退出，
@@ -89,13 +99,6 @@ public class QuestionSeeder implements ApplicationRunner {
         int before = existingContents.size();
 
         seedAll();
-
-        // D23: 补种后立刻清缓存。否则新题要等 question-ttl（默认 10 分钟）过期才可能被抽到——
-        // "演示前刚改过题库，结果抽不到新题"就是这么来的。只在真有新增时才清，
-        // 重启但题库无变化时不打扰 Redis。
-        if (seededCount > 0) {
-            questionCache.invalidateAll();
-        }
 
         log.info("题库种子数据: 已有 {} 道，本次新增 {} 道，合计 {} 道",
                 before, seededCount, existingContents.size());
