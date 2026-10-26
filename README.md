@@ -27,7 +27,7 @@
 | google-adk | 1.13.0（源码克隆至 E:\cluadeworkbase\adk-java，2026-10-23） | 2026-10-23 |
 | a2a-java-sdk | 两条版本线：**0.3.2.Final**（`io.github.a2asdk`，A2A 协议 0.3.0；adk-java a2a 模块的底层 SDK，本项目主链路，示例覆写为 0.3.0.Beta1）vs **1.4.0.Final**（`org.a2aproject.sdk`，A2A 协议 1.0，D6 跑通 Hello World 实证）。两者报文不互通 | 2026-10-26 |
 | mcp java-sdk | **2.0.0**（adk-java core 传递依赖，m2 已落地；D3 审计实证） | 2026-10-24 |
-| langchain4j | 1.12.2（`mockverse-monolith` 显式 `<version>` 锁定；桥接模块 `google-adk-langchain4j` 1.13.0，2026-10-24 验证通过，D9 复用） | 2026-10-24 |
+| langchain4j | 1.12.2（父 POM 显式 `<version>` 锁定；桥接模块 `google-adk-langchain4j` 1.13.0，2026-10-24 验证通过，D9 复用） | 2026-10-24 |
 | Spring Boot | **3.3.1**（`<parent>` 引入；选 3.3.x 而非 4.0.x 是为了与 MyBatis-Plus 3.5.7 的 `spring-boot3-starter` 稳定配套） | 2026-10-28 |
 | MyBatis-Plus | **3.5.7**（`mybatis-plus-spring-boot3-starter`，Boot 3 专用，不要用 Boot 2 的 `mybatis-plus-boot-starter`） | 2026-10-28 |
 | MySQL | **8.0**（Docker 容器 `mockverse-mysql`，映射 3307；本机 3306 另有 MySQL 26.7 实例，避免冲突） | 2026-10-28 |
@@ -49,10 +49,13 @@ mockverse/
 ├── docs/                # 架构图、E-R 图、面试 QA 手册
 │   └── journal/         # 每日复盘日志
 ├── labs/                # 各里程碑代码归档（源模块在 adk-java/examples/ 下）
-├── mockverse-monolith/  # ★ D8 起的单体 v1（Spring Boot 3.3.1 + MyBatis-Plus + MySQL）
-│   ├── src/main/java/com/mockverse/monolith/{entity,mapper,controller,service,agent,rag,smoke,config}/
-│   ├── src/main/resources/db/schema.sql        # 五张表 DDL（D11 新增 resume_diagnosis）
-│   ├── src/main/resources/knowledge/           # RAG 语料 7 个 md / 50 篇（D10 已入库 pgvector）
-│   └── dev.env          # 本地库连接（被 .gitignore 排除，勿提交）
-└── services/            # 第三周微服务版（D15 起）
+├── interview-service/   # 8081 面试官 Agent（A2A 服务端 + SSE + 异步判题提交）
+├── knowledge-service/   # 8082 RAG 知识库 Agent（pgvector 直连）
+├── resume-service/      # 8083 简历诊断 Agent
+├── judge-service/       # 8084 MCP 判题 Server（javac/java）+ Kafka 判题消费者
+├── dev.env              # 本地库连接（被 .gitignore 排除，勿提交）
+└── pom.xml              # 父 POM（四服务 + 统一依赖版本）
+
+注：D8 起的单体 mockverse-monolith 已在 D21 退役，基线保留在 tag `v0.1-monolith`。
+    取回方式：`git checkout v0.1-monolith`（只读参考，不再维护）。
 ```

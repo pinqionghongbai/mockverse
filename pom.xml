@@ -11,8 +11,8 @@
       与 mockverse-monolith 的版本锁定表逐字一致 —— 版本锁定纪律: 禁止中途变更依赖版本,
       父 POM 只做集中管理, 不做升级。
 
-      mockverse-monolith 不在 <modules> 里: 它是 tag v0.1-monolith 的参考基线,
-      保持独立可构建; D21 全链路联调通过后再退役。
+      D21 起 mockverse-monolith 已退役（目录删除）: 基线保留在 tag v0.1-monolith,
+      需要时 git checkout v0.1-monolith 取回，只读参考。
     -->
     <parent>
         <groupId>org.springframework.boot</groupId>

@@ -54,9 +54,9 @@ D17 用 RemoteA2AAgent 接回——这是"哪怕功能还没解耦"的诚实含�
 - `dependencyManagement` 不另设——版本统一走 **properties 集中声明**，与单体逐字一致
   （版本锁定表纪律：**禁止中途变更依赖版本**，父 POM 只做集中，不做升级）：
   `mybatis-plus 3.5.7 / google-adk 1.13.0 / langchain4j 1.12.2 / embeddings 1.12.2-beta22 / Java 21`。
-- `<modules>`：三个新服务。**mockverse-monolith 不纳入 modules**——它是 v0.1-monolith 的
-  参考基线（tag 锁定），保持独立可构建；若纳入父 POM 反而制造"它也要跟着 modules 演进"
-  的耦合。单体退役时机 = D21 联调通过后。
+- `<modules>`：四个服务（D18 加 judge-service）。**mockverse-monolith 不纳入 modules**——它是
+  v0.1-monolith 的参考基线（tag 锁定），保持独立可构建。**D21 已按计划退役**：目录删除，
+  基线留在 tag `v0.1-monolith`（`57e5df7`），`git checkout v0.1-monolith` 可取回。
 
 ## 四、机械拆分原则（D15 下午执行口径）
 

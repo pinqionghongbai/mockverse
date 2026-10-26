@@ -96,7 +96,7 @@ erDiagram
 -- ============================================================
 -- MockVerse 初始化脚本 v0.2（D7 初稿 + D11 增补 resume_diagnosis）
 -- 约定：主键用 BIGINT（雪花ID，应用层生成），避免自增在分库时冲突
--- 落地脚本以 mockverse-monolith/src/main/resources/db/schema.sql 为准
+-- 落地脚本以 interview-service/src/main/resources/db/schema.sql 为准（D21 单体退役后）
 -- ============================================================
 CREATE DATABASE IF NOT EXISTS mockverse
   DEFAULT CHARACTER SET utf8mb4
