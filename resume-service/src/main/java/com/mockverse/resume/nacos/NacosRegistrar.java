@@ -94,6 +94,15 @@ public class NacosRegistrar {
             log.info("已从 Nacos 注销: {}:{}", instance.getIp(), port);
         } catch (NacosException e) {
             log.warn("从 Nacos 注销失败（临时实例会在心跳超时后自动剔除）: {}", e.getMessage());
+        } finally {
+            // D23 复查：Nacos 客户端持有 gRPC 长连接与后台线程（心跳 / redo），
+            // 不 shutDown 的话进程退出前会有一小段时间的线程残留。
+            // 与 NacosConfigRefresher.unsubscribe 同一口径。
+            try {
+                namingService.shutDown();
+            } catch (Exception e) {
+                log.debug("关闭 NamingService 时出错（进程即将退出，可忽略）: {}", e.getMessage());
+            }
         }
     }
 

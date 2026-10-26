@@ -6,6 +6,8 @@ import com.mockverse.interview.entity.Question;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -69,8 +71,12 @@ public class QuestionCache {
             try {
                 return objectMapper.readValue(cached, LIST_TYPE);
             } catch (Exception e) {
-                // 缓存内容损坏（版本升级/手工写脏）时不能抛：删掉这条，回源重建
-                log.warn("题库缓存反序列化失败，忽略并回源: key={}, {}", key, e.getMessage());
+                // 缓存内容损坏（版本升级 / 手工写脏 / 实体字段变更）时不能抛，回源重建。
+                // **必须真的删掉**：只回源不删的话，这条坏键会一直留到 TTL（10 分钟），
+                // 期间每个请求都要付一次"解析失败 + 查库"——而日志只 WARN 一次，
+                // 很容易被当成偶发抖动。D23 复查发现注释写了"删掉这条"但代码没有删。
+                log.warn("题库缓存反序列化失败，删除后回源重建: key={}, {}", key, e.getMessage());
+                redis.delete(key);
             }
         }
 
@@ -114,7 +120,7 @@ public class QuestionCache {
     }
 
     /**
-     * 键的构造：每个维度要么是"不过滤"标记，要么是 {@code eq:<原值>}。
+     * 键的构造：每个维度要么是"不过滤"标记，要么是 {@code eq:<Base64(原值)>}。
      *
      * <p><b>为什么不能拿 {@code *} 当"不过滤"的占位符</b>（D23 复查实测）：{@code category}
      * 是**用户可控的请求参数**。原实现把 null/blank 编码成 {@code *}，于是
@@ -122,14 +128,24 @@ public class QuestionCache {
      * 全量候选集缓存 —— 请求明明指定了一个不存在的分类（本应返回 409），却拿到一道随机题。
      * 缓存改变了业务语义，这是缓存层最不该犯的错。
      *
-     * <p>用前缀区分后不可能撞：不过滤是裸的 {@code any}，带过滤的永远以 {@code eq:} 开头，
-     * 两者字符串不可能相等；而 {@code eq:} 后面的原值可以包含任何字符。
+     * <p><b>为什么值还要 Base64</b>（同一轮复查的第二刀）：只加 {@code eq:} 前缀仍然不唯一。
+     * 键是 {@code dim(c) + ":" + dim(d)} 的拼接，而 c/d 可以含 {@code ":"}，于是
+     * <pre>
+     *   category="A:eq:B", difficulty="C"    → eq:A:eq:B:eq:C
+     *   category="A",      difficulty="B:eq:C" → eq:A:eq:B:eq:C   ← 同一把键
+     * </pre>
+     * 两个完全不同的查询共享缓存，返回错的题。Base64 URL 字母表是 {@code A-Za-z0-9-_}，
+     * **不含冒号**，所以分隔符不会再被值吃掉，拼接结果是单射的。
      */
     private static String key(String category, String difficulty) {
         return KEY_PREFIX + dim(category) + ":" + dim(difficulty);
     }
 
     private static String dim(String value) {
-        return value == null || value.isBlank() ? "any" : "eq:" + value;
+        if (value == null || value.isBlank()) {
+            return "any";
+        }
+        return "eq:" + Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 }

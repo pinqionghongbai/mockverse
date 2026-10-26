@@ -137,6 +137,18 @@ public class RedisGateway {
         }
     }
 
+    /** 删除单个键。用于"缓存内容损坏，删掉重建"这类场景。 */
+    public void delete(String key) {
+        if (!available()) {
+            return;
+        }
+        try {
+            redis.delete(key);
+        } catch (RuntimeException e) {
+            degrade("DEL " + key, e);
+        }
+    }
+
     /**
      * 按模式删除键（用 SCAN 游标，不用 KEYS）。
      *
