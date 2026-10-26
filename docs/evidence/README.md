@@ -56,6 +56,21 @@ PYTHONUTF8=1 python -I a2a_hang.py
 `[kb] 40s 后 tasks/get → completed`。根因与修法见
 `docs/journal/D20-2026-11-10.md` 第二节。
 
+### D22 —— `message/stream` 补齐
+
+| 文件 | 用途 | 前置 |
+|---|---|---|
+| `a2a_stream_once.py` | 验 A2A 流式信封：`message/stream` 的 `submitted → working → completed` | 8081（+ 8082 若测 kb） |
+
+```bash
+PYTHONUTF8=1 python -I a2a_stream_once.py iv    # 进程内 interviewer_agent
+PYTHONUTF8=1 python -I a2a_stream_once.py kb    # 跨进程 knowledge_agent
+```
+
+**注意两种信封的报文形状不同**（D22 踩过）：`message/send` 回 Task 快照，artifact 在
+`result.artifacts[].parts`；`message/stream` 回事件流，artifact 在
+`result.artifact.parts`（单数，在 `artifact-update` 里）。只认一种形状会把"有文本"误判成"没文本"。
+
 ### D21 —— A2A 修复 + 故障注入
 
 | 文件 | 用途 | 前置 |
