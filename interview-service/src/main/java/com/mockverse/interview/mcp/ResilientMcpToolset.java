@@ -4,12 +4,15 @@ import com.google.adk.agents.ReadonlyContext;
 import com.google.adk.tools.BaseTool;
 import com.google.adk.tools.BaseToolset;
 import io.reactivex.rxjava3.core.Flowable;
-import io.reactivex.rxjava3.schedulers.Schedulers;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -56,8 +59,18 @@ public class ResilientMcpToolset implements BaseToolset {
     /** 是否已成功加载过一次；一旦为 true 就不再进锁。 */
     private volatile boolean warmed;
 
-    /** 首轮加载的串行锁（见 {@link #loadOnce}）。 */
+    /** 首轮加载的串行锁（见 {@link #loadCold}）。 */
     private final ReentrantLock warmupLock = new ReentrantLock();
+
+    /**
+     * 只用来跑**冷启动**的加载（见 {@link #loadTools}）。cached 而不是固定大小：
+     * 加载是低频的，固定池会在并发首轮时排队，而排队时间会计入调用方的有界等待。
+     */
+    private static final ExecutorService LOADER = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "mcp-tool-load");
+        t.setDaemon(true);
+        return t;
+    });
 
     public ResilientMcpToolset(String label, BaseToolset delegate,
                                Duration loadTimeout, Duration cooldown) {
@@ -75,31 +88,58 @@ public class ResilientMcpToolset implements BaseToolset {
                     TimeUnit.NANOSECONDS.toMillis(blockedUntil - now));
             return Flowable.empty();
         }
-        return Flowable.defer(() -> {
-                    if (warmed) {
-                        return delegate.getTools(readonlyContext);
-                    }
-                    return loadOnce(readonlyContext);
-                })
-                // 底层是同步阻塞的 initialize()/listTools()，必须挪出 Agent 的事件循环线程
-                .subscribeOn(Schedulers.io())
-                .timeout(loadTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                // 工具"列出来之后、真正调用时"也可能失败（判题服务中途挂掉），逐个包一层降级
-                .map(tool -> (BaseTool) new DegradableTool(tool))
-                .doOnComplete(() -> blockedUntil = 0L)
-                .onErrorResumeNext(error -> {
-                    blockedUntil = System.nanoTime() + cooldown.toNanos();
-                    log.warn("{}：工具列表加载失败，{}s 内不再尝试，本轮按「没有该工具」继续。原因: {}",
-                            label, cooldown.toSeconds(), innermost(error), error);
-                    return Flowable.empty();
-                });
+        try {
+            List<BaseTool> tools = loadTools(readonlyContext);
+            blockedUntil = 0L;
+            // 工具"列出来之后、真正调用时"也可能失败（判题服务中途挂掉），逐个包一层降级
+            return Flowable.fromIterable(tools).map(DegradableTool::new);
+        } catch (Exception e) {
+            blockedUntil = System.nanoTime() + cooldown.toNanos();
+            log.warn("{}：工具列表加载失败，{}s 内不再尝试，本轮按「没有该工具」继续。原因: {}",
+                    label, cooldown.toSeconds(), innermost(e), e);
+            return Flowable.empty();
+        }
     }
 
     /**
-     * 首次加载：串行 + 一次性取完。
+     * 加载工具列表：**在调用线程上返回，但不让调用线程做慢 IO**。
+     *
+     * <p><b>为什么不切 Rx 线程</b>（D21 的修法）：D18 用
+     * {@code .subscribeOn(Schedulers.io())} 把加载挪走，副作用是**整个 Agent 事件流从此跑在
+     * io 线程上**。而 a2a SDK 0.3.2 的 {@code DefaultRequestHandler} 把
+     * {@code AgentExecutor.execute()} 返回当作"Agent 执行完毕"并关闭事件队列——事件流一异步，
+     * 队列就在 Agent 跑完之前被拆掉，任务永远停在 {@code working}（D19 发现、D20 定性）。
+     * 试过在 A2A 侧包一层同步 Agent 去补救，**嵌套订阅同一个 Agent 流会直接挂死**（D21 实测），
+     * 所以只能让工具流本身保持同步。
+     *
+     * <p><b>那 D18 担心的"阻塞事件循环"怎么办</b>：慢的只有冷启动的
+     * {@code initialize()}（judge 挂死时最坏 3×init-timeout）。所以这里只把**冷启动**
+     * 丢给 {@link #LOADER}，调用线程有界等待 {@code loadTimeout}；失败/超时就按"没有这个工具"
+     * 继续，并进入冷却。已建会话后的 {@code listTools()} 是一次毫秒级往返，直接在调用线程跑。
+     *
+     * <p>净效果：**事件流始终在调用线程上**（A2A 契约成立），而最坏等待仍是
+     * {@code loadTimeout}（与 D18 的 {@code .timeout()} 同一个量级）。
+     */
+    private List<BaseTool> loadTools(ReadonlyContext readonlyContext) throws Exception {
+        if (warmed) {
+            return delegate.getTools(readonlyContext).toList().blockingGet();
+        }
+        Future<List<BaseTool>> future = LOADER.submit(() -> loadCold(readonlyContext));
+        try {
+            return future.get(loadTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            // 中断等待。底层 HTTP 未必响应中断，靠冷却保证这种泄漏最多每 cooldown 发生一次
+            future.cancel(true);
+            throw new IllegalStateException(
+                    label + "：工具加载超过 " + loadTimeout.toSeconds() + "s", e);
+        }
+    }
+
+    /**
+     * 冷启动：串行 + 一次性取完（在 {@link #LOADER} 线程上执行）。
      *
      * <p>这里用 {@code blockingGet} 是刻意的——只有把它读完，{@code mcpSession} 才真正建好，
-     * 锁才有意义。此时已经在 {@link Schedulers#io()} 线程上，阻塞不伤事件循环。
+     * 锁才有意义。此时已经在 worker 线程上，阻塞不影响调用方的事件流。
      *
      * <p><b>用 {@code tryLock} 而不是 {@code synchronized}</b>：如果 judge-service 挂死，
      * 首个加载线程会一直卡在 {@code initialize()} 里并**一直持有锁**。用 {@code synchronized}
@@ -107,7 +147,7 @@ public class ResilientMcpToolset implements BaseToolset {
      * {@code loadTimeout} 就放弃串行，退回"多建一条会话"的老路——宁可泄漏一条会话，
      * 也不能让整条链路跟着挂死。
      */
-    private Flowable<BaseTool> loadOnce(ReadonlyContext readonlyContext) {
+    private List<BaseTool> loadCold(ReadonlyContext readonlyContext) throws Exception {
         boolean locked = false;
         try {
             locked = warmupLock.tryLock(loadTimeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -117,15 +157,15 @@ public class ResilientMcpToolset implements BaseToolset {
         if (!locked) {
             log.warn("{}：等待首轮加载超过 {}s，本次不串行（可能已有一条会话卡在建连）",
                     label, loadTimeout.toSeconds());
-            return delegate.getTools(readonlyContext);
+            return delegate.getTools(readonlyContext).toList().blockingGet();
         }
         try {
             if (warmed) {
-                return delegate.getTools(readonlyContext);
+                return delegate.getTools(readonlyContext).toList().blockingGet();
             }
             List<BaseTool> tools = delegate.getTools(readonlyContext).toList().blockingGet();
             warmed = true;
-            return Flowable.fromIterable(tools);
+            return tools;
         } finally {
             warmupLock.unlock();
         }

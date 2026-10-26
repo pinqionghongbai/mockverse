@@ -54,6 +54,13 @@ public class A2AServerConfig {
      * <p>用 {@link MultiAgentFactory#create()} 的完整树（root_coordinator + interviewer_agent
      * + 两个跨进程子 Agent）：远端通过 A2A 发来一条用户消息，coordinator 照常做进程内路由，
      * 需要知识/简历能力时再由 {@link A2ARemoteAgent} 转出去，形成跨进程的两级路由（D17）。
+     *
+     * <p><b>这里不能包一层"同步化"的 Agent</b>（D21 实测）：试过在 A2A 侧包一个
+     * {@code BaseAgent}，在 {@code runAsyncImpl} 里 {@code delegate.runAsync(ctx).toList().blockingGet()}
+     * 再 {@code fromIterable} 返回——**嵌套订阅同一个 Agent 的事件流会直接挂死**
+     * （本线程阻塞 30s 超时；丢到 worker 线程同样挂）。A2A 的同步语义因此不能在这一层伪造，
+     * 只能靠"事件流本来就是同步的"来满足。所以真正的修法在
+     * {@link com.mockverse.interview.mcp.ResilientMcpToolset}：工具加载不再切线程。
      */
     @Bean
     public BaseAgent a2aAgent(MultiAgentFactory factory) {
