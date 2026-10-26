@@ -1,0 +1,38 @@
+# Docker 构建上下文排除（D24）
+#
+# 构建上下文是仓库根，而四个服务只需要各自的 target/*.jar。
+# 不排除的话每次 build 都要把 .git / labs / docs / 日志传一遍——几百 MB 的无效 IO。
+
+.git
+.gitignore
+.idea
+.vscode
+
+# 文档与脚本（不进镜像）
+docs
+labs
+*.docx
+
+# 日志与当日脚手架
+*.log
+.d??tmp
+.d24backup
+
+# 本地环境文件（**绝不能进镜像**）
+.env
+*.env
+dev.env
+
+# 各服务里与镜像无关的产物
+*/target/classes
+*/target/generated-sources
+*/target/maven-archiver
+*/target/maven-status
+*/target/test-classes
+*/target/surefire-reports
+
+# 仓库根的辅助文件
+STATUS.md
+README.md
+gen_plan_docx.py
+gen_handbook_docx.py

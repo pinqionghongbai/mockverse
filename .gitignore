@@ -29,3 +29,6 @@ Thumbs.db
 
 # 证据脚本的一次性输出（docs/evidence/README.md 的归档边界）
 docs/evidence/**/*_out.txt
+
+# D24: 切换 compose 前的数据备份（含真实数据，不入库）
+.d24backup/

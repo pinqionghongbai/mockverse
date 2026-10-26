@@ -38,6 +38,20 @@
 | Redis | **redis:7.2-alpine**（Docker 容器 `mockverse-redis`，映射 6379；客户端为 Boot BOM 管理的 spring-boot-starter-data-redis / Lettuce） | 2026-11-13 |
 | Nacos | **nacos-server v2.4.3**（Docker 容器 `mockverse-nacos`，standalone，8848/9848/9849）+ **nacos-client 2.4.3**（客户端版本跟随服务端，不跨大版本） | 2026-11-13 |
 
+## 快速启动（D24 起）
+
+```bash
+cp docker/.env.example .env      # 填 MYSQL_PASSWORD / PG_PASSWORD / DEEPSEEK_API_KEY
+mvn package -DskipTests          # 镜像里不跑 Maven，jar 要先在宿主机构建
+docker compose up -d             # 九个容器：五个基础设施 + 四个服务 + Nginx
+docker compose ps                # 都 healthy 后访问 http://localhost
+```
+
+统一入口是 **80 端口的 Nginx**：`/api/interview/*` → 8081、`/api/knowledge/*` → 8082、
+`/api/resume/*` → 8083、`/a2a/*` → 8081。详见 `docs/deploy-d24.md`。
+
+> 宿主机 `java -jar` 的启动方式（D15-D23 的流程）仍然可用，见 `STATUS.md` 第六节 6.4。
+
 ## 安全须知
 
 API Key 一律通过环境变量注入（`DEEPSEEK_API_KEY`），**任何情况下不得提交到 Git**。
@@ -55,7 +69,9 @@ mockverse/
 ├── knowledge-service/   # 8082 RAG 知识库 Agent（pgvector 直连）
 ├── resume-service/      # 8083 简历诊断 Agent
 ├── judge-service/       # 8084 MCP 判题 Server（javac/java）+ Kafka 判题消费者
-├── dev.env              # 本地库连接（被 .gitignore 排除，勿提交）
+├── docker/              # D24: 服务 Dockerfile（通用 JRE + judge 专用 JDK）/ nginx / pg init
+├── docker-compose.yml   # D24: 一键拉起（五基础设施 + 四服务 + Nginx）
+├── dev.env              # 宿主机模式的库连接（被 .gitignore 排除，勿提交）
 └── pom.xml              # 父 POM（四服务 + 统一依赖版本）
 
 注：D8 起的单体 mockverse-monolith 已在 D21 退役，基线保留在 tag `v0.1-monolith`。

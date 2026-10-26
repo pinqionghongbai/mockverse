@@ -1,0 +1,34 @@
+# judge-service 专用镜像（D24）
+#
+# 与其它三个服务的唯一区别：**基础镜像是 JDK 不是 JRE**。
+# judge-service 的 JavaJudge 会真的调用 `javac` 编译候选人代码、再 `java` 运行，
+# 用 JRE 镜像会在第一次判题时抛 "Cannot run program javac"。
+#
+# 其余说明见同目录的 Dockerfile（共用构建口径：不跑 Maven，jar 从宿主机 COPY）。
+
+FROM eclipse-temurin:21-jdk
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ARG JAR_FILE
+COPY ${JAR_FILE} /app/app.jar
+
+# 判题是内存大户（每次 javac + java 子进程），默认堆给得最保守
+ENV JAVA_TOOL_OPTIONS="-Xmx192m"
+ENV TZ=Asia/Shanghai
+
+# 判题工作目录（每次判题建独立子目录、结束即删）。
+#
+# **变量名必须是 MOCKVERSE_JUDGE_WORK_ROOT**，对应 application.yml 的
+# `mockverse.judge.work-root`——Spring 的 relaxed binding 按"前缀.属性"映射，
+# 写成 JUDGE_WORK_ROOT 完全不会被识别（D24 二查发现，与 D23 的 lettuce.pool 同类错误：
+# 配了但不生效，比不配更糟，因为看配置的人会以为它起作用了）。
+ENV MOCKVERSE_JUDGE_WORK_ROOT=/tmp/mockverse-judge
+
+EXPOSE 8084
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_TOOL_OPTIONS -jar /app/app.jar"]
