@@ -35,6 +35,8 @@
 | Embedding 模型 | **bge-small-zh-v1.5**（本地 ONNX，随 `langchain4j-embeddings-bge-small-zh-v15:1.12.2-beta22` 分发，512 维，不依赖外部 API） | 2026-10-31 |
 | Ollama + 模型 | 0.40.8（qwen2.5:7b 拉取受代理 fake-ip DNS 污染阻塞，降级备胎，详见 docs/ollama-issue.md） | 2026-10-22 |
 | DeepSeek API | deepseek-chat（deepseek-flash 引擎，2026-10-22 验证连通） | 2026-10-22 |
+| Redis | **redis:7.2-alpine**（Docker 容器 `mockverse-redis`，映射 6379；客户端为 Boot BOM 管理的 spring-boot-starter-data-redis / Lettuce） | 2026-11-13 |
+| Nacos | **nacos-server v2.4.3**（Docker 容器 `mockverse-nacos`，standalone，8848/9848/9849）+ **nacos-client 2.4.3**（客户端版本跟随服务端，不跨大版本） | 2026-11-13 |
 
 ## 安全须知
 

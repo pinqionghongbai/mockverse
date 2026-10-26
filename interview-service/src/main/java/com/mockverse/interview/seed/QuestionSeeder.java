@@ -1,6 +1,7 @@
 package com.mockverse.interview.seed;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.mockverse.interview.cache.QuestionCache;
 import com.mockverse.interview.entity.Question;
 import com.mockverse.interview.mapper.QuestionMapper;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class QuestionSeeder implements ApplicationRunner {
 
     private final QuestionMapper questionMapper;
     private final TransactionTemplate transactionTemplate;
+    private final QuestionCache questionCache;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -87,6 +89,13 @@ public class QuestionSeeder implements ApplicationRunner {
         int before = existingContents.size();
 
         seedAll();
+
+        // D23: 补种后立刻清缓存。否则新题要等 question-ttl（默认 10 分钟）过期才可能被抽到——
+        // "演示前刚改过题库，结果抽不到新题"就是这么来的。只在真有新增时才清，
+        // 重启但题库无变化时不打扰 Redis。
+        if (seededCount > 0) {
+            questionCache.invalidateAll();
+        }
 
         log.info("题库种子数据: 已有 {} 道，本次新增 {} 道，合计 {} 道",
                 before, seededCount, existingContents.size());

@@ -33,3 +33,13 @@ mybatis-plus:
 logging:
   level:
     com.mockverse.resume: debug
+
+mockverse:
+  nacos:
+    # D23: 服务注册。关掉后不影响服务本体（只是控制台看不到本实例）
+    enabled: ${NACOS_ENABLED:true}
+    server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+    namespace: ${NACOS_NAMESPACE:}
+    group: ${NACOS_GROUP:DEFAULT_GROUP}
+    # 留空 = 用 InetAddress.getLocalHost()；多网卡机器（Hyper-V/VPN）要显式指定
+    ip: ${NACOS_REGISTER_IP:}

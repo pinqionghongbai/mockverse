@@ -8,6 +8,11 @@ import com.mockverse.interview.agent.AgentRuntime;
 import com.mockverse.interview.agent.AgentRuntime.ChatResult;
 import com.mockverse.interview.agent.InterviewerPrompts;
 import com.mockverse.interview.agent.MultiAgentFactory;
+import com.mockverse.interview.cache.QuestionCache;
+import com.mockverse.interview.cache.RateLimitExceededException;
+import com.mockverse.interview.cache.RedisFeatureProperties;
+import com.mockverse.interview.cache.SessionLock;
+import com.mockverse.interview.cache.SseRateLimiter;
 import com.mockverse.interview.config.InterviewProperties;
 import com.mockverse.interview.dto.AnswerResponse;
 import com.mockverse.interview.dto.MessageView;
@@ -68,6 +73,10 @@ public class InterviewService {
     private final AgentRuntime runtime;
     private final InterviewProperties properties;
     private final TransactionTemplate tx;
+    private final QuestionCache questionCache;
+    private final SessionLock sessionLock;
+    private final SseRateLimiter rateLimiter;
+    private final RedisFeatureProperties redisProps;
 
     /** 编排树只建一次并复用: 树和 Runner 都是轻量对象，模型才是重资源（单例 bean）。 */
     private LlmAgent root;
@@ -119,6 +128,14 @@ public class InterviewService {
             // content 列是 NOT NULL，空回答直接放行会变成 DataIntegrityViolation（500），提前拦成 400
             throw new IllegalArgumentException("回答不能为空");
         }
+        // D23: 会话级分布式锁。轮数计算、历史回放、落库必须在同一临界区内——
+        // 否则并发请求会各自算出同一个 round、各自 rebuildSession 互相覆盖。
+        // 锁在 LLM 调用之外才加是没用的（临界区正是"读状态→算轮数→写结果"整段）。
+        return sessionLock.withLock(sessionId, () -> answerLocked(sessionId, userAnswer));
+    }
+
+    /** {@link #answer} 的临界区部分：调用方已持会话锁。 */
+    private AnswerResponse answerLocked(Long sessionId, String userAnswer) {
         InterviewSession session = sessionMapper.selectById(sessionId);
         if (session == null) {
             throw new IllegalArgumentException("会话不存在: " + sessionId);
@@ -208,12 +225,36 @@ public class InterviewService {
         if (userAnswer == null || userAnswer.isBlank()) {
             throw new IllegalArgumentException("回答不能为空");
         }
+        // D23: 锁必须活到整条流结束——方法级 synchronized 在返回 Flowable 时就释放了，
+        // 那时真正的工作还没开始（D13 四查的原话："单方法锁形同虚设"）。
+        String lockToken = sessionLock.tryAcquire(sessionId);
+        try {
+            return answerStreamLocked(sessionId, userAnswer)
+                    // doFinally 覆盖 onComplete / onError / dispose 三种终止。
+                    // 客户端中途断开（dispose）也必须解锁，否则会话锁要等 180s 自然过期。
+                    .doFinally(() -> sessionLock.release(sessionId, lockToken));
+        } catch (RuntimeException e) {
+            // 订阅前抛错（会话不存在 400 / 已结束 409 / 回放失败）时流还没建立，
+            // doFinally 不会执行，必须在这里释放，否则这把锁要挂满 TTL
+            sessionLock.release(sessionId, lockToken);
+            throw e;
+        }
+    }
+
+    /** {@link #answerStream} 的临界区部分：调用方已持会话锁。 */
+    private io.reactivex.rxjava3.core.Flowable<StreamEvent> answerStreamLocked(Long sessionId, String userAnswer) {
         InterviewSession session = sessionMapper.selectById(sessionId);
         if (session == null) {
             throw new IllegalArgumentException("会话不存在: " + sessionId);
         }
         if (!"IN_PROGRESS".equals(session.getStatus())) {
             throw new IllegalStateException("会话已结束: " + session.getStatus());
+        }
+        // D23: 限流放在会话校验之后、重建会话之前——被拒的请求不该付任何 Agent 成本。
+        // 按 userId 而不是 sessionId 计数：换个会话重新开一场绕不过去。
+        if (!rateLimiter.tryAcquire(session.getUserId())) {
+            throw new RateLimitExceededException(
+                    "请求过于频繁，请稍后再试（每分钟上限 " + rateLimitPerMinute() + " 次）");
         }
         int round = (session.getTotalRounds() == null ? 0 : session.getTotalRounds()) + 1;
         boolean finished = round >= session.getMaxRounds();
@@ -305,13 +346,17 @@ public class InterviewService {
     /**
      * 抽题。先按条件取候选集再在内存里随机，避免 {@code ORDER BY RAND()} 全表扫描；
      * 条件列顺序与 {@code idx_cat_diff_enabled} 一致，能命中联合索引。
+     *
+     * <p>D23 起候选集走 Redis 缓存（cache-aside），Redis 不可用时自动回源 MySQL——
+     * 缓存是加速器不是依赖，见 {@link QuestionCache}。
      */
     private Question pickQuestion(String category, String difficulty) {
-        List<Question> candidates = questionMapper.selectList(
-                Wrappers.<Question>lambdaQuery()
-                        .eq(category != null && !category.isBlank(), Question::getCategory, category)
-                        .eq(difficulty != null && !difficulty.isBlank(), Question::getDifficulty, difficulty)
-                        .eq(Question::getEnabled, true));
+        List<Question> candidates = questionCache.candidates(category, difficulty,
+                () -> questionMapper.selectList(
+                        Wrappers.<Question>lambdaQuery()
+                                .eq(category != null && !category.isBlank(), Question::getCategory, category)
+                                .eq(difficulty != null && !difficulty.isBlank(), Question::getDifficulty, difficulty)
+                                .eq(Question::getEnabled, true)));
         if (candidates.isEmpty()) {
             throw new IllegalStateException("题库为空或没有符合条件的题目，请先导入题库。");
         }
@@ -389,6 +434,11 @@ public class InterviewService {
                         .orderByDesc(ChatMessage::getSeqNo)
                         .last("LIMIT 1"));
         return last == null ? 1 : last.getSeqNo() + 1;
+    }
+
+    /** 限流上限，只用于给用户看的提示文案（真正的判断在 {@link SseRateLimiter} 里）。 */
+    private int rateLimitPerMinute() {
+        return redisProps.getSsePerMinute();
     }
 
     /** 恢复素材: 该会话全部消息按 seq 升序投影（含 USER 与 AGENT 两类）。 */

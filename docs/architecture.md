@@ -148,8 +148,8 @@ graph LR
 |---|---|---|
 | D1-D6 | 单进程 Agent + 跨进程 A2A 示例 + MCP 工具 | ✅ 已实证 |
 | D8-D14 | 单体 v1：一个 Spring Boot 服务装三个 Agent + MySQL | 🟡 进行中（D9 面试官 / D10 RAG 知识库 / D11 简历诊断已落地；D12 待做多 Agent 进程内编排） |
-| D15-D21 | 微服务化：三服务 A2A 互联 + MCP 判题 + Kafka 异步 | ⏳ |
-| D22-D26 | 工程化：Redis 缓存 + Nacos + Compose + 前端 | ⏳ |
+| D15-D21 | 微服务化：三服务 A2A 互联 + MCP 判题 + Kafka 异步 | ✅ 已实证（D15-D21） |
+| D22-D26 | 工程化：**Redis（D23 ✅）** + **Nacos（D23 ✅）** + Compose（D24） + 前端（D25） | 🟡 进行中 |
 | D27-D30 | 收尾：简历 + 演示视频 + 已知局限清单 | ⏳ |
 
 > **D9 已落地的单体内部结构**（面试可讲的"从示例到工程"的跨越）：
@@ -165,6 +165,24 @@ graph LR
 >
 > 关键点：**Agent 不是被"调用一次"，而是被"装配成 Bean"**；工具是 Spring Bean，所以能拿 Mapper；会话状态在 Runtime 里，业务状态在 `chat_message` 里，两者职责分开。
 >
+> **D23 已落地的支撑层**（四个服务共用，都是"加速器/发现手段"而非依赖）：
+>
+> ```
+> interview-service
+>   ├─ QuestionCache ──┐
+>   ├─ SessionLock   ──┼─→ RedisGateway（失败冷却 30s）──→ Redis 6379
+>   └─ SseRateLimiter─┘        失败时：缓存回源 / 锁降级 / 限流放行
+>
+> 四个服务
+>   ├─ NacosRegistrar      → ApplicationReadyEvent 后注册（ephemeral + 自动心跳）
+>   └─ NacosConfigRefresher（仅 interview）→ 监听 interview-service.yaml，
+>                                            max-rounds 改完对新会话即时生效
+> ```
+>
+> 关键点：**Redis 挂了面试照常能答**（缓存回源 MySQL、锁降级为无锁、限流放行），
+> health 里 `cache` 单独报但 `status` 不降级——加速器故障不该让编排器重启一个没坏的服务。
+> Nacos 注册失败同样只 WARN：注册中心是发现手段，不是服务本体。
+
 > **D10 已落地的 RAG 链路**（与面试链路并列，互不依赖）：
 >
 > ```

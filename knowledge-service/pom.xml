@@ -87,6 +87,16 @@
             <version>${langchain4j.embeddings.version}</version>
         </dependency>
 
+        <!--
+          D23: Nacos 客户端（服务注册）。与 interview-service 同一份取舍说明，见其
+          NacosProperties 类注释：不用 SCA starter，直接用官方 SDK。
+        -->
+        <dependency>
+            <groupId>com.alibaba.nacos</groupId>
+            <artifactId>nacos-client</artifactId>
+            <version>${nacos-client.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

@@ -1,0 +1,13 @@
+== D23 Nacos 验证 ==
+nacos = http://localhost:8848
+log   = ../../../.d23-interview-service.log
+[1] 已注册服务: ['knowledge-service', 'resume-service', 'interview-service', 'judge-service']
+[2] interview-service  ip=['127.0.0.1'] healthy=[True]
+[2] knowledge-service  ip=['127.0.0.1'] healthy=[True]
+[2] resume-service     ip=['127.0.0.1'] healthy=[True]
+[2] judge-service      ip=['127.0.0.1'] healthy=[True]
+[3] 发布 max-rounds=3 -> true
+    日志: 2026-10-26T14:59:38.646+08:00  INFO 245528 --- [interview-service] [listener.task-0] c.m.i.nacos.NacosConfigRefresher         : 动态配置生效（配置变更推送）: max-rounds 5 -> 3（对**新开的会话**立即生效，进行中的会话不受影响）
+[3] 发布 max-rounds=5 -> true
+    日志: 2026-10-26T14:59:39.676+08:00  INFO 245528 --- [interview-service] [listener.task-0] c.m.i.nacos.NacosConfigRefresher         : 动态配置生效（配置变更推送）: max-rounds 3 -> 5（对**新开的会话**立即生效，进行中的会话不受影响）
+== 全部通过 ==

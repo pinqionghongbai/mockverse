@@ -1,5 +1,6 @@
 package com.mockverse.interview.controller;
 
+import com.mockverse.interview.cache.RateLimitExceededException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -28,6 +29,15 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ProblemDetail conflict(IllegalStateException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+    }
+
+    /**
+     * SSE 限流（D23）。必须是 429 而不是 409：409 的语义是"资源状态冲突，改参数再来"，
+     * 429 才是"等一会儿重试"。客户端据此决定退避策略。
+     */
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ProblemDetail tooManyRequests(RateLimitExceededException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, e.getMessage());
     }
 
     /**

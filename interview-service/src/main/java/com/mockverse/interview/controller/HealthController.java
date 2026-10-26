@@ -1,5 +1,7 @@
 package com.mockverse.interview.controller;
 
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,9 +26,11 @@ import java.util.Map;
 public class HealthController {
 
     private final DataSource dataSource;
+    private final RedisConnectionFactory redisConnectionFactory;
 
-    public HealthController(DataSource dataSource) {
+    public HealthController(DataSource dataSource, RedisConnectionFactory redisConnectionFactory) {
         this.dataSource = dataSource;
+        this.redisConnectionFactory = redisConnectionFactory;
     }
 
     @GetMapping("/health")
@@ -47,6 +51,19 @@ public class HealthController {
         }
         body.put("status", Boolean.TRUE.equals(db.get("connected")) ? "UP" : "DEGRADED");
         body.put("database", db);
+
+        // D23: Redis 是加速器不是依赖——它挂了服务照常工作（缓存回源、锁降级、限流放行），
+        // 所以 Redis 不可用**不**把 status 打成 DEGRADED，只单独报出来便于排障。
+        Map<String, Object> cache = new LinkedHashMap<>();
+        try (RedisConnection conn = redisConnectionFactory.getConnection()) {
+            String pong = conn.ping();
+            cache.put("connected", "PONG".equalsIgnoreCase(pong));
+            cache.put("product", "Redis " + pong);
+        } catch (Exception e) {
+            cache.put("connected", false);
+            cache.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+        body.put("cache", cache);
         return body;
     }
 }

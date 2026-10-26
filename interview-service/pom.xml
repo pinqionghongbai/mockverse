@@ -44,6 +44,16 @@
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
+        <!--
+          D23: Redis。题库候选集缓存 / 会话级分布式锁 / SSE 限流三项能力都基于它。
+          版本由 spring-boot-starter-parent 3.3.1 的 BOM 决定（版本锁定纪律：不手填版本号）。
+          默认客户端是 Lettuce（Netty 异步），无需额外依赖。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
@@ -91,6 +101,18 @@
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
             <version>${langchain4j.version}</version>
+        </dependency>
+
+        <!--
+          D23: Nacos 客户端（服务注册 + 动态配置）。
+          刻意**不用** spring-cloud-starter-alibaba-nacos-discovery：本项目没有 Spring Cloud 生态
+          （无 OpenFeign/Gateway/LoadBalancer），SCA 会把整套 Spring Cloud 上下文带进来，
+          而它提供的只是对同一个 nacos-client 的封装。取舍见 NacosProperties 类注释。
+        -->
+        <dependency>
+            <groupId>com.alibaba.nacos</groupId>
+            <artifactId>nacos-client</artifactId>
+            <version>${nacos-client.version}</version>
         </dependency>
 
         <dependency>

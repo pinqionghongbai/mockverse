@@ -67,6 +67,12 @@
           Spring Boot 认证过的 2.17.1，把改动面压到最小。
         -->
         <jackson-annotations.version>2.20</jackson-annotations.version>
+        <!--
+          D23: Nacos 客户端。版本**必须与 Nacos 服务端对齐**（容器 nacos/nacos-server:v2.4.3），
+          客户端与服务端的协议（gRPC 的请求/响应结构）在 2.x 小版本之间是兼容的，
+          但跨大版本（1.x ↔ 2.x）不兼容。这里没有"选新版本"的空间，只有"跟着服务端走"。
+        -->
+        <nacos-client.version>2.4.3</nacos-client.version>
     </properties>
 
     <dependencyManagement>

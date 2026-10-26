@@ -21,6 +21,22 @@ spring:
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
+  data:
+    redis:
+      # D23: 缓存/锁/限流三项能力共用一个实例。容器名 mockverse-redis，宿主 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+      timeout: 2s
+      connect-timeout: 2s
+      lettuce:
+        pool:
+          # 并发面试时每条 SSE 流都会持有连接（锁/限流各一次往返，用完即还）
+          max-active: 16
+          max-idle: 8
+          min-idle: 0
+          max-wait: 1s
   kafka:
     # D20: 单节点 KRaft Kafka（容器名 mockverse-kafka，映射 9092）
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -82,6 +98,26 @@ mockverse:
     request-timeout: ${JUDGE_MCP_REQUEST_TIMEOUT:45s}
     # 加载失败后的冷却：这段时间内不再尝试，避免每轮都付一次超时代价
     failure-cooldown: ${JUDGE_MCP_FAILURE_COOLDOWN:30s}
+  redis:
+    # D23: 三项能力的参数集中在这里，量级关系一眼可见
+    # 题库只在启动期补种，10 分钟足够；补种完成后 QuestionSeeder 会主动失效
+    question-ttl: ${REDIS_QUESTION_TTL:10m}
+    # 空结果缓存 30s（防穿透）：补种/改分类后最多半分钟可见
+    empty-ttl: ${REDIS_EMPTY_TTL:30s}
+    # 会话锁要覆盖整条 SSE 流，与 InterviewController.SSE_TIMEOUT_MILLIS 同值
+    session-lock-ttl: ${REDIS_SESSION_LOCK_TTL:180s}
+    # 单用户每分钟 SSE 上限：一场面试最多 5 轮，这个值只挡脚本狂刷
+    sse-per-minute: ${REDIS_SSE_PER_MINUTE:30}
+  nacos:
+    # D23: 服务注册 + 动态配置。关掉后不影响面试主流程（只是控制台看不到本实例）
+    enabled: ${NACOS_ENABLED:true}
+    server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+    namespace: ${NACOS_NAMESPACE:}
+    group: ${NACOS_GROUP:DEFAULT_GROUP}
+    # 留空 = 用 InetAddress.getLocalHost()；多网卡机器（Hyper-V/VPN）要显式指定
+    ip: ${NACOS_REGISTER_IP:}
+    # 配置监听的 data-id。留空 = <spring.application.name>.yaml
+    config-data-id: ${NACOS_CONFIG_DATA_ID:}
 
 logging:
   level:

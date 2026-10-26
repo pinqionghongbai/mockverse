@@ -71,6 +71,30 @@ PYTHONUTF8=1 python -I a2a_stream_once.py kb    # 跨进程 knowledge_agent
 `result.artifacts[].parts`；`message/stream` 回事件流，artifact 在
 `result.artifact.parts`（单数，在 `artifact-update` 里）。只认一种形状会把"有文本"误判成"没文本"。
 
+### D23 —— Redis 三项能力 + Nacos 注册/动态配置
+
+| 文件 | 用途 | 前置 |
+|---|---|---|
+| `d23_redis_check.py` | 题库缓存可用 / 空值兜底 409 / 并发锁一 200 一 409 / 锁释放后可继续 | 8081 + Redis |
+| `d23_nacos_check.py` | 四服务注册齐全 + 实例 IP 非 fake-ip + `max-rounds` 发布后日志双向生效 | Nacos + 8081 日志可读 |
+
+```bash
+# 在 docs/evidence/D23 目录下
+PYTHONUTF8=1 python -I d23_redis_check.py d23_redis_out.txt
+PYTHONUTF8=1 python -I d23_nacos_check.py d23_nacos_out.txt ../../../.d23-interview-service.log
+```
+
+**脚本不直连 Redis / Nacos 客户端**（约定只用标准库），键的观察交给 shell：
+
+```bash
+docker exec mockverse-redis redis-cli KEYS "mv:*"
+docker exec mockverse-redis redis-cli TTL "mv:question:candidates:*:*"
+```
+
+**限流（429）不在脚本里**：默认上限 30 次/分钟，测一次要打 31 次 LLM。做法是起一次性实例
+`--server.port=8091 --mockverse.redis.sse-per-minute=2 --mockverse.nacos.enabled=false`，
+用 userId=999 连打三次 SSE，预期 `200 / 200 / 429`，跑完即杀。见 D23 日志第四节。
+
 ### D21 —— A2A 修复 + 故障注入
 
 | 文件 | 用途 | 前置 |
@@ -103,11 +127,12 @@ PYTHONUTF8=1 python -I d20_async_judge.py
 ## 前置条件
 
 ```bash
-docker start mockverse-mysql mockverse-pg mockverse-kafka
+docker start mockverse-mysql mockverse-pg mockverse-kafka mockverse-redis mockverse-nacos
 # 8082 / 8083 先起（8081 启动时要拉它们的 AgentCard），然后 8084、8081
 ```
 
-端口：8081 interview / 8082 knowledge / 8083 resume / 8084 judge / 9092 Kafka / 3307 MySQL / 5433 pgvector。
+端口：8081 interview / 8082 knowledge / 8083 resume / 8084 judge / 9092 Kafka / 3307 MySQL /
+5433 pgvector / **6379 Redis / 8848 Nacos（D23 起）**。
 
 ## 约定
 
