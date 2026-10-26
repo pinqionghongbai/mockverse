@@ -56,6 +56,22 @@ PYTHONUTF8=1 python -I a2a_hang.py
 `[kb] 40s 后 tasks/get → completed`。根因与修法见
 `docs/journal/D20-2026-11-10.md` 第二节。
 
+### D21 —— A2A 修复 + 故障注入
+
+| 文件 | 用途 | 前置 |
+|---|---|---|
+| `a2a_resume_once.py` | 单发一条简历诊断请求，验跨进程路由到 8083 | 8081 + 8083 |
+| `blackhole.py` | **假死服务**：接受 TCP 连接但一个字节都不回，用于验证 `loadTimeout` 真的生效 | 无 |
+
+```bash
+# 终端 A：起假服务
+PYTHONUTF8=1 python -I blackhole.py 18084
+# 终端 B：把 8081 的判题地址指过去再起
+export JUDGE_SERVICE_URL="http://127.0.0.1:18084/mcp"
+# 预期：start 约 13s（10s 加载超时 + 模型），日志有"工具加载超过 10s"；
+#       紧接着发 A2A 请求，任务仍应 completed（不会回到 D19 的永久 working）
+```
+
 ### D20 —— 异步判题取证
 
 | 文件 | 用途 | 前置 |
