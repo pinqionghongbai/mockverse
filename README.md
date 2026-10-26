@@ -43,7 +43,7 @@
 ```bash
 cp docker/.env.example .env      # 填 MYSQL_PASSWORD / PG_PASSWORD / DEEPSEEK_API_KEY
 mvn package -DskipTests          # 镜像里不跑 Maven，jar 要先在宿主机构建
-docker compose up -d             # 九个容器：五个基础设施 + 四个服务 + Nginx
+docker compose up -d             # 十个容器：五个基础设施 + 四个服务 + Nginx
 docker compose ps                # 都 healthy 后访问 http://localhost
 ```
 

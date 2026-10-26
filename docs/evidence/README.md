@@ -71,6 +71,25 @@ PYTHONUTF8=1 python -I a2a_stream_once.py kb    # 跨进程 knowledge_agent
 `result.artifacts[].parts`；`message/stream` 回事件流，artifact 在
 `result.artifact.parts`（单数，在 `artifact-update` 里）。只认一种形状会把"有文本"误判成"没文本"。
 
+### D24 —— Docker Compose 一键拉起
+
+| 文件 | 用途 | 前置 |
+|---|---|---|
+| `sse_timing.py` | **SSE 是否逐字到达**（不是被 nginx 缓冲后一次性吐出） | 一个未结束的会话 + 网关或 8081 |
+
+```bash
+# 在 docs/evidence/D24 目录下
+PYTHONUTF8=1 python -I sse_timing.py <sessionId> http://localhost
+PYTHONUTF8=1 python -I sse_timing.py <sessionId> http://localhost:8081   # 对照组
+```
+
+**判据是到达时刻的分布，不是 chunk 数量**——一次性吐出也是 N 个 chunk。
+实测基准：直连 8081 → 52 chunk / spread 0.33s / 最后 0.1s 到达 27%；
+经 nginx → 53 chunk / spread 0.45s / 19%。被缓冲时 spread 趋近 0 且最后 0.1s 到达 >80%。
+
+> 这个脚本同时是 **D23 那条"证据脚本全文件扫描会假阳性"的同类教训**：
+> 验证方法本身写错，比被测对象有 bug 更危险。
+
 ### D23 —— Redis 三项能力 + Nacos 注册/动态配置
 
 | 文件 | 用途 | 前置 |
@@ -132,7 +151,10 @@ docker start mockverse-mysql mockverse-pg mockverse-kafka mockverse-redis mockve
 ```
 
 端口：8081 interview / 8082 knowledge / 8083 resume / 8084 judge / 9092 Kafka / 3307 MySQL /
-5433 pgvector / **6379 Redis / 8848 Nacos（D23 起）**。
+5433 pgvector / **6379 Redis / 8848 Nacos（D23 起）** / **80 Nginx（D24 起）**。
+
+D24 起推荐直接用 `docker compose up -d` 起全套（见 `docs/deploy-d24.md`），
+上面的 `docker start` + `java -jar` 流程仍然可用。**两种模式不能混用**（服务层）。
 
 ## 约定
 

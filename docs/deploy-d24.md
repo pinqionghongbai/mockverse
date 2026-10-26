@@ -1,7 +1,7 @@
 # D24 部署文档：Docker Compose 一键拉起
 
 > 对应计划：**D24 = Nginx + Docker Compose 一键拉起全家桶**，验收 = `docker compose up` 后浏览器完整走一遍流程。
-> 一句话结论：**九个容器（五个基础设施 + 四个服务 + Nginx）一条命令起全，经 80 端口走完五段演示**。
+> 一句话结论：**十个容器（五个基础设施 + 四个服务 + Nginx）一条命令起全，经 80 端口走完五段演示**。
 
 ---
 
@@ -20,7 +20,7 @@ mvn package -DskipTests
 docker compose up -d
 
 # 4. 等健康（约 60~90s：四个 Spring Boot 要拉 AgentCard、灌种子）
-docker compose ps          # 九个都 healthy 即可
+docker compose ps          # 十个都 healthy 即可
 
 # 5. 验证
 curl http://localhost/healthz/interview
@@ -168,6 +168,35 @@ nginx 只 `listen 0.0.0.0:80`（IPv4），而容器内 `localhost` 优先解析�
 
 ---
 
+## 六·五、⚠️ 两种模式**不能混用**
+
+D24 二查实测：**容器化的 knowledge/resume + 宿主机 `java -jar` 的 interview** 这种混搭，
+跨进程 A2A 会失败，返回降级话术：
+
+```
+WARN Agent 链路无有效输出, 返回降级话术: 链路异常: UnresolvedAddressException: null
+```
+
+**根因**：AgentCard 里只有一个 `url` 字段，而两种模式需要的值不同——
+
+| 部署方式 | 卡片里该写什么 |
+|---|---|
+| 全容器 | `http://knowledge-service:8082`（容器网络内可达） |
+| 全宿主机 | `http://localhost:8082`（宿主机可达） |
+
+混用时无论写哪个，总有一方解析不了。实测宿主机解析 `knowledge-service`：
+
+```
+socket.gethostbyname('knowledge-service')  →  [Errno 11001] getaddrinfo failed
+```
+
+**所以：要么全部 `docker compose up`，要么全部 `java -jar`。**
+混用只适合"只调 HTTP、不触发跨进程路由"的场景（比如只测 `/start`）。
+
+> 基础设施可以混用（compose 起 MySQL/PG/Kafka/Redis/Nacos + 宿主机起四个服务）——
+> 因为那些是**端口映射**，不是服务发现。实测 health 里 `db=True / cache=True`、
+> `start` 200、Kafka 异步判题也通。**只有 A2A 跨进程那一层会挂**。
+
 ## 七、常用命令
 
 ```bash
@@ -195,7 +224,7 @@ docker compose down -v
 | 项 | 结果 |
 |---|---|
 | 首次构建四个镜像 | knowledge 36s + 其余三个 35s（Docker 层缓存生效后） |
-| `docker compose up -d`（已构建） | **34s** 起完九个容器 |
+| `docker compose up -d`（已构建） | **34s** 起完十个容器 |
 | 全部 healthy | 再等约 60s（四个 Spring Boot 拉卡片 + 灌种子） |
 | `down` + `up` 后数据 | `question=13` / `chat_message` 递增 / `knowledge_chunk=50` **全部保留** |
 | start（经网关） | 200 |
@@ -218,6 +247,7 @@ docker compose down -v
   当前外部只走 HTTP API（经 nginx），不受影响。
 - **没有资源上限**（`mem_limit` / `cpus`）：堆靠 `JAVA_TOOL_OPTIONS` 控制。
   真要限制容器内存，加 `mem_limit` 并确认 JVM 能正确感知（需要 `-XX:MaxRAMPercentage` 或显式 `-Xmx`）。
+- **两种模式不能混用**（见 6.5）：容器服务 + 宿主机服务混搭时，AgentCard 的 url 总有一方解析不了。
 - **单机单实例**：没有副本、没有负载均衡策略（Nginx 直接 upstream 到容器名）。
 - **未做镜像体积优化**：四个 jar 共约 870MB，镜像更大。多阶段构建 + jlink 可以压，
   但那是 D29 的事。
