@@ -21,7 +21,7 @@ D23 Redis 三项能力验证（只依赖标准库）。
     "缓存真的省掉了 SQL"必须看两处原始证据，脚本代替不了：
         # a) 键与 TTL
         docker exec mockverse-redis redis-cli KEYS  "mv:question:*"
-        docker exec mockverse-redis redis-cli TTL   "mv:question:candidates:*:*"
+        docker exec mockverse-redis redis-cli TTL   "mv:question:candidates:any:any"
         # b) 连发 3 次 start 前后的 SQL 计数（服务日志里的 MyBatis 输出）
         grep -c "FROM question WHERE" <interview-service.log>
     D23 实测：3 次 start 后该计数 delta=0，TTL 597。

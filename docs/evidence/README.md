@@ -88,7 +88,7 @@ PYTHONUTF8=1 python -I d23_nacos_check.py d23_nacos_out.txt ../../../.d23-interv
 
 ```bash
 docker exec mockverse-redis redis-cli KEYS "mv:*"
-docker exec mockverse-redis redis-cli TTL "mv:question:candidates:*:*"
+docker exec mockverse-redis redis-cli TTL "mv:question:candidates:any:any"
 ```
 
 **限流（429）不在脚本里**：默认上限 30 次/分钟，测一次要打 31 次 LLM。做法是起一次性实例
