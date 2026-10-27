@@ -91,5 +91,5 @@ Happy to send a PR for either suggestion. Thanks!
 
 - 建议提交前: 长跑实验确认"20分钟静默后是否最终抛错"——若是,措辞"blocks for ~20 minutes then throws McpToolLoadingException"更准确; 若否(永久挂死), 保持 "indefinitely"
 - 提交时附上 ReproToolset.java 或精简版
-- 提交后把 issue 链接记入 docs/qa-manual.md 和简历素材("向 google/adk-java 报告 Windows 平台缺陷, 含最小复现与修复建议")
+- 提交后把 issue 链接归档进 `docs/open-source-contributions.md`
 - 若维护者回应积极 → 可跟 PR(需签 Google CLA, 线上电子签)

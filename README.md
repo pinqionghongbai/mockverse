@@ -3,8 +3,8 @@
 ![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.1-6DB33F?logo=springboot&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker%20Compose-10%20containers-2496ED?logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-14%20passed-success)
-![License](https://img.shields.io/badge/license-not%20set-lightgrey)
+[![CI](https://github.com/pinqionghongbai/mockverse/actions/workflows/ci.yml/badge.svg)](https://github.com/pinqionghongbai/mockverse/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > 面向 Java 后端求职者的 AI 模拟面试系统：面试官 Agent 出题追问、RAG 知识库 Agent 答疑、
 > 简历诊断 Agent 结构化点评、MCP 判题工具真实编译运行代码。
@@ -154,8 +154,7 @@ curl http://localhost/healthz/interview   # 应返回 status=UP
 
 ```
 mockverse/
-├── STATUS.md                # ★ 项目状态快照（新会话唯一入口）
-├── docs/                    # 架构 / E-R / QA 手册 / 每日 journal / 部署文档
+├── docs/                    # 架构 / 数据库设计 / 部署文档 / 复现脚本
 ├── interview-service/       # 8081 面试官 Agent（编排树根 + SSE + 异步判题提交）
 ├── knowledge-service/       # 8082 RAG 知识库 Agent（pgvector 直连）
 ├── resume-service/          # 8083 简历诊断 Agent（结构化输出）
@@ -188,7 +187,7 @@ mockverse/
 
 ---
 
-## 六、已知局限（面试主动讲，不是不知道）
+## 六、已知局限（如实标注）
 
 1. **无鉴权**：HTTP / A2A / MCP 端点任何人可调。对外暴露前需网关 + Basic Auth。
 2. **判题不是沙盒**：候选代码仍能读写宿主文件系统与网络；防护是临时目录 + 资源上限 + 超时。
@@ -199,24 +198,21 @@ mockverse/
 7. **移动端只验过视口**（390×844），未在真机点过。
 8. **Kafka 是单分区**（自动创建，默认值 1），并行度为 0。
 
-完整清单与证据见 `docs/resume-d27.md` 第六节。
-
 ---
 
 ## 七、文档索引
 
 | 想了解 | 看 |
 |---|---|
-| 现在做到哪、下一步做什么 | `STATUS.md` |
 | 架构与实证边界 | `docs/architecture.md` |
-| 数据库设计 | `docs/db-design.md` |
-| 部署细节与坑 | `docs/deploy-d24.md` |
+| 数据库设计（E-R + DDL） | `docs/db-design.md` |
+| 容器化部署与坑 | `docs/deploy-d24.md` |
 | 内网穿透（SSE 会被缓冲） | `docs/deploy-d26-tunnel.md` |
-| 面试问答（70 条） | `docs/qa-manual.md` |
-| 简历话术（每句有实证） | `docs/resume-d27.md` |
-| 30 问自攻 | `docs/d28-self-interview.md` |
-| 每日踩坑记录 | `docs/journal/` |
-| 复现脚本 | `docs/evidence/` |
+| 复现脚本（判题 / A2A / SSE / 验收） | `docs/evidence/` |
+| A2A 双版本线对比 | `docs/a2a-comparison-d6.md` |
+| RAG 技术记录 | `docs/rag-d10.md` |
+| 提示词对照实验 | `docs/prompt-ab-d9.md` |
+| 开源贡献（adk-java issue + PR） | `docs/open-source-contributions.md` |
 
 ---
 

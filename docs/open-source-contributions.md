@@ -1,4 +1,4 @@
-# 开源贡献记录（简历素材）
+# 开源贡献记录
 
 > 本文件收录可写入简历、且有公开链接佐证的开源贡献。每条都必须"点开链接即真"。
 
@@ -95,7 +95,7 @@ https://github.com/google/adk-java/pull/1691
 我按 Python SDK 的 shutil.which 语义写了修复：在交给 ProcessBuilder 之前把 npx 解析成 npx.cmd，
 实测从挂死 900 秒变成 4 秒加载 14 个工具。"
 
-**技术细节支撑**: 见 qa-manual.md Q14/Q16 + labs/mcp-own-test/ReproToolset.java +
+**技术细节支撑**: 见 labs/mcp-own-test/ReproToolset.java +
 docs/issue-final-adk-java.md
 
 **后续动作（待办）**:
@@ -106,7 +106,7 @@ docs/issue-final-adk-java.md
 - [x] 在 issue #1686 回复维护者（2026-10-23 10:55）
 - [ ] 跟进 review：CONTRIBUTING 要求**单提交**，改动用 `git commit --amend` + `git push --force-with-lease`
 - [ ] 若被合并或标记 → 更新本文件状态与简历表述
-- [ ] 定期回访 issue（建议每 2-3 天，D7/D14 复盘时顺带检查）
+- [ ] 定期回访 issue（建议每 2-3 天检查一次）
 
 ---
 

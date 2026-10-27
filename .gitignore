@@ -39,3 +39,21 @@ docs/evidence/**/*_out.txt
 # Python
 __pycache__/
 *.pyc
+
+# ============================================================
+# 本地保留、不入库（个人简历 / 面试准备 / 开发过程记录）
+# 公开仓库只保留项目本身：代码 + README + 技术文档 + 复现脚本
+# ============================================================
+STATUS.md
+docs/charter.md
+docs/journal/
+docs/resume-d27.md
+docs/d28-self-interview.md
+docs/qa-manual.md
+docs/d30-charter-review.md
+docs/tech-stack-evidence.md
+docs/retrospective-vibecoding.md
+docs/publish-checklist.md
+简历素材/
+.export_resume.py
+.scrub_refs.py

@@ -1,0 +1,48 @@
+name: CI
+
+# 只跑单元测试，不启动任何基础设施。
+# 依据：三个测试类都是纯函数测试（不连 DB、不起 Spring 上下文），
+# 见 interview-service/src/test 与 judge-service/src/test。
+# 真正的端到端验证靠 docs/evidence/ 下的脚本，那些需要 MySQL/pg/Kafka，不放 CI。
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  # 同一分支的新推送取消旧任务，省 runner 时间
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests (JDK 21)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # `mvn test` 会先编译四个模块的 main 代码，再跑测试，
+      # 所以这一步同时验证了"能编译"与"单测通过"。
+      - name: Build and run tests
+        run: mvn -B -ntp test
+
+      - name: Upload surefire reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: |
+            */target/surefire-reports/*.txt
+            */target/surefire-reports/*.xml
+          if-no-files-found: ignore

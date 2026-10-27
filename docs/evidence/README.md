@@ -8,7 +8,7 @@
 一次性输出（`*.txt` / `*.json` 响应体、日志片段），入库会让仓库变脏，所以当时的选择是
 "结论写进 journal，脚手架不入库"。
 
-问题出在 **journal 的可复算性**上：D20 日志第六查写着"外部人重跑脚本即可复算"，
+问题出在**可复算性**上：早期记录写着"外部人重跑脚本即可复算"，
 但脚本本身是 gitignored 的——这句话当时是空的。这个目录就是补这个洞。
 
 ## 归档范围（有意为之的边界）
@@ -54,7 +54,7 @@ PYTHONUTF8=1 python -I a2a_hang.py
 
 `a2a_hang.py` 的预期输出（未修状态）：`[iv] 40s 后 tasks/get → working`、
 `[kb] 40s 后 tasks/get → completed`。根因与修法见
-`docs/journal/D20-2026-11-10.md` 第二节。
+D20 的实施记录。
 
 ### D22 —— `message/stream` 补齐
 
@@ -119,7 +119,7 @@ PYTHONUTF8=1 python -I docs/evidence/D26/sse_probe_server.py 8099
 **Redis 不检查 `mv:*` 缓存键**：那些键带 TTL，冷下来必然为空，拿它当判据会把"缓存过期"
 误报成"Redis 挂了"（D26 二查）。改为 `PING` + 一个 10s TTL 的探针键写读。
 
-不覆盖的部分：四条链路的可见结果（浏览器走查，见 `docs/journal/D26-2026-11-16.md` 第三节）、
+不覆盖的部分：四条链路的可见结果（浏览器走查，见 `docs/deploy-d26-tunnel.md`）、
 SSE 时序（`D24/sse_timing.py`）、A2A 信封（`D22/a2a_stream_once.py`）、MCP 用例（`D18/judge_probe.py`）。
 
 ### D23 —— Redis 三项能力 + Nacos 注册/动态配置
@@ -144,7 +144,7 @@ docker exec mockverse-redis redis-cli TTL "mv:question:candidates:any:any"
 
 **限流（429）不在脚本里**：默认上限 30 次/分钟，测一次要打 31 次 LLM。做法是起一次性实例
 `--server.port=8091 --mockverse.redis.sse-per-minute=2 --mockverse.nacos.enabled=false`，
-用 userId=999 连打三次 SSE，预期 `200 / 200 / 429`，跑完即杀。见 D23 日志第四节。
+用 userId=999 连打三次 SSE，预期 `200 / 200 / 429`，跑完即杀。见 D23 的实施记录。
 
 ### D21 —— A2A 修复 + 故障注入
 

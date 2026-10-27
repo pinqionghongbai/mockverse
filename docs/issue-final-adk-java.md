@@ -126,7 +126,7 @@ Happy to send a PR for either suggestion. Thanks!
 3. Body 整体粘贴 markdown 块内容
 4. （可选）把 `labs/mcp-own-test/ReproToolset.java` 拖进附件区
 5. Submit new issue
-6. 提交后把 issue 链接告诉浮浮酱 —— 归档进 qa-manual.md + 简历素材（"向 google/adk-java 报告 Windows 平台缺陷，提供最小复现与修复建议"）
+6. 提交后把 issue 链接归档进 `docs/open-source-contributions.md`
 ```
 Follow-up with two clarifications after furt
 

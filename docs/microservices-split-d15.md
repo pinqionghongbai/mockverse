@@ -86,7 +86,7 @@ D17 用 RemoteA2AAgent 接回——这是"哪怕功能还没解耦"的诚实含�
 > （agent/common/converters/executor），Maven 中央仓库也没有制品。实际做法是自建传输层：
 > `AgentExecutor`（ADK 侧）+ `DefaultRequestHandler`（a2a SDK 侧）+ 自己的 `A2AController`
 > （HTTP/JSON-RPC 信封）。职责等价，**实现不等价**。详见
-> `docs/journal/D16-2026-11-06.md` 第二节。
+> D16 的实施记录。
 
 | D17 | interview 用 RemoteA2AAgent 调远端知识库/简历 Agent | 第三节 coordinator 摘除点的"接回" |
 | D18-D19 | MCP 判题 Server + judge_code 工具接入 | 架构图新增节点 |
@@ -120,7 +120,7 @@ D17 用 RemoteA2AAgent 接回——这是"哪怕功能还没解耦"的诚实含�
    而不是不引入依赖。pom 里确实没有 mysql/mybatis，这一点与方案一致。
 2. **知识意图过渡态话术**：实测两条知识类消息都归因 `interviewer_agent`，由面试官答
    "不在本服务范围"——诚实性成立，但不是方案预期的 coordinator 直接话术。D17 接回后消失。
-   详见 `docs/journal/D15-2026-11-05.md` 五节。
+   详见 D15 的实施记录。
 3. **三服务未并行启动过**：验收按方案逐个起、逐个停，不做并发压测（D15 范围外）。
 
 **收工审查补充（三查，错误路径）**：knowledge-service 的 health 最初在运行期
@@ -128,7 +128,7 @@ pgvector 宕机时返回 500（`available` 只在启动时置位），与注释�
 矛盾；检索/reindex 也是 500 而非 503。已修（`DataAccessException` → 503 语义，
 health 报 DEGRADED，不毒化 `available` 以保住 Hikari 自愈）。修复后实测：
 pg 停 → health 200 DEGRADED / search·reindex 503；pg 恢复 → 不重启应用即自愈。
-详见 `docs/journal/D15-2026-11-05.md` 十一节。
+详见 D15 的实施记录。
 
 
 **收工审查补充（八查，MySQL 故障路径）**：interview-service / resume-service 原先用
@@ -137,7 +137,7 @@ Spring Boot 默认的 Hikari `connectionTimeout=30s`，MySQL 宕机时 `/api/hea
 3 秒快速失败差 10 倍）。已在两个服务的 `application.yml` 加
 `spring.datasource.hikari.connection-timeout: 3000`；修复后实测 **3.0~3.4 秒**，
 MySQL 恢复后**不重启应用** 2 秒内自愈，start / history 均 200。
-详见 `docs/journal/D15-2026-11-05.md` 十六节。
+详见 D15 的实施记录。
 
 **收口后整改（2026-11-05，主人指示）**：
 
@@ -149,11 +149,11 @@ MySQL 恢复后**不重启应用** 2 秒内自愈，start / history 均 200。
 | 死代码 | 删除拆分时整树复制带来的 `entity/User.java`、`mapper/UserMapper.java`（服务内 0 引用） |
 | 服务隔离实证 | 只停 MySQL：interview/resume `DEGRADED` + 端点 503，**knowledge-service 仍 `UP` 且 search 200** |
 
-详见 `docs/journal/D15-2026-11-05.md` 二十节。
+详见 D15 的实施记录。
 
 **整改后再检查（2026-11-05，Bug I）**：`QuestionSeeder` 的 10 条种子数据是逐条 insert、无事务，
 中途失败会留下"半套题库"，而下次启动的 `selectCount > 0` 判断会认为"已有数据"直接跳过 →
 题库永久残缺且日志看起来完全正常（静默降级）。已用 `TransactionTemplate` 包成原子操作
 （不能直接加 `@Transactional`——同类内部调用不走代理）。用临时库 `mockverse_seedtest` 验证：
 空库灌入 10 条、二次启动幂等跳过，验证后已清理。另修 3 处小瑕疵（注释错位、日志打 null、口径错误），
-并挂账 `reindex` 的 TRUNCATE 非原子（见 STATUS）。详见日志二十一节。
+并挂账 `reindex` 的 TRUNCATE 非原子。详见日志二十一节。
