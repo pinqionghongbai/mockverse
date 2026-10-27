@@ -243,7 +243,29 @@ docker compose down -v
 
 ---
 
-## 九、已知局限（如实标注）
+## 九、🔴 重建单个服务后 nginx 会 502（D26 踩到）
+
+**症状**：`docker compose up -d --build interview-service` 之后，
+`curl http://localhost/healthz/knowledge` 返回 **502 Bad Gateway**，
+但 `curl http://localhost:8082/api/health` 是 **200**，容器也 `healthy`。
+
+**根因**：nginx 在**启动时**解析一次 `proxy_pass http://knowledge-service:8082`
+里的域名并缓存 IP（没配 `resolver`）。服务容器被重建后换了 IP，nginx 还往旧地址发。
+
+**修法（一行）**：
+
+```bash
+docker exec mockverse-nginx nginx -s reload    # reload 会重新解析 upstream
+```
+
+**什么时候会遇到**：重建任意一个服务容器、或 Docker Desktop 重启后容器拿到新 IP。
+`docs/evidence/D26/local_acceptance.py` 在遇到 502 时会直接把这条命令打出来。
+
+> 没做"彻底修复"（`resolver 127.0.0.11 valid=10s` + 变量形式 `proxy_pass`）：
+> 变量形式会改变 URI 传递语义，本项目有正则 location（SSE 那条）依赖 `$request_uri`，
+> 收益（省一条 reload）与风险不成比例。**重建服务后 reload 一次**是更稳的约定。
+
+## 十、已知局限（如实标注）
 
 - **镜像里不跑 Maven**：必须先本地 `mvn package`，不是"clone 即跑"（那是 D29 的目标）。
 - **Nacos 认证关闭**（`NACOS_AUTH_ENABLE=false`）：配置内容外部可写。只在本地/内网使用；

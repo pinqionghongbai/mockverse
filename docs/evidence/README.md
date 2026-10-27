@@ -94,16 +94,25 @@ PYTHONUTF8=1 python -I sse_timing.py <sessionId> http://localhost:8081   # 对�
 > 这个脚本同时是 **D23 那条"证据脚本全文件扫描会假阳性"的同类教训**：
 > 验证方法本身写错，比被测对象有 bug 更危险。
 
-### D26 —— 本地全套验收
+### D26 —— 本地全套验收 + 内网穿透
 
 | 文件 | 用途 | 前置 |
 |---|---|---|
 | `local_acceptance.py` | 十容器健康 + 四个健康端点 + Redis 探活/写读 + Nacos 注册 + Kafka topic，一条命令 exit 0 | `docker compose up -d` |
+| `sse_probe_server.py` | **中间层会不会压住 SSE** 的最小实验（不依赖 MockVerse），四个端点对比"持续/小/大/突发后静默" | 无 |
 
 ```bash
 # 在仓库根目录
 PYTHONUTF8=1 python -I docs/evidence/D26/local_acceptance.py out.txt
+
+# 判定中间层的 SSE 行为：另开一条隧道指向 8099，用 curl -sN 观察到达时刻
+PYTHONUTF8=1 python -I docs/evidence/D26/sse_probe_server.py 8099
 ```
+
+**`sse_probe_server.py` 的由来**：D26 在 Cloudflare Tunnel 下发现判题结果流 24s 收到
+0 字节，而服务端推送成功、本地立刻收到。为排除"我们代码的问题"，用这个不依赖本项目的
+最小服务单独验证 → **中间层压的是"长时间静默的流"，与体积无关**（先发 4KB 再静默同样收不到）。
+结论与修法见 `docs/deploy-d26-tunnel.md` 第四节。
 
 **容器数不写死**：由 `docker compose config --services` 现算，只校验"配置里的服务都起来了
 且健康"——D24 踩过"文档写 9、实际 10"的坑。

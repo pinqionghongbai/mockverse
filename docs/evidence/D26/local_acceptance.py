@@ -104,7 +104,13 @@ for svc, path, must in [
         ok = status == 200 and must in body
         check("健康端点 " + svc, ok, "HTTP %d, 含 %s=%s" % (status, must, must in body))
     except Exception as e:  # noqa: BLE001 - 验收脚本要把任何异常都记成失败
-        check("健康端点 " + svc, False, repr(e))
+        hint = ""
+        # 最常见的假故障（D26 踩过）：容器健康、直连也通，但网关 502 ——
+        # nginx 在启动时解析一次 upstream 域名并缓存 IP，服务容器被重建换了 IP 后
+        # 它还往旧地址发，于是 502。reload 一次即恢复。
+        if "502" in repr(e):
+            hint = "（容器若 healthy，执行 `docker exec mockverse-nginx nginx -s reload` 重解析上游 IP）"
+        check("健康端点 " + svc, False, repr(e) + hint)
 
 # ---------- 3. 基础设施可用性 ----------
 
