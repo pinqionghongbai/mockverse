@@ -235,6 +235,12 @@ docker compose down -v
 | 简历诊断（跨进程） | 11.9s completed |
 | 重启后链路 | start 200 / 知识 6.32s / 425 字 / 带引用 |
 
+> **D26 复测（2026-11-16，`down` 后全量重建）**：`up -d` **39s**，返回后 **7s** 十容器
+> 全 healthy（interview 启动日志 `Started in 6.59 seconds`）。与上表 34s + "再等约 60s"
+> 的差异未强行归因——两次之间 compose 的 `depends_on`/`healthcheck` 没有改动，
+> "60s" 更像是当时的估算。换机器以新测量为准，别把 60s 当 SLA。
+> 一键验收：`PYTHONUTF8=1 python -I docs/evidence/D26/local_acceptance.py`。
+
 ---
 
 ## 九、已知局限（如实标注）

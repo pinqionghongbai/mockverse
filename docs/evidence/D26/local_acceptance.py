@@ -8,7 +8,11 @@
 为什么要有这个脚本：
     D24/D25 的验收结论散在终端输出和 journal 里，下次开工只能靠"上次好像跑通了"。
     这里把可自动判定的部分固定下来，**判据全部来自被测系统本身**（compose 配置、
-    容器状态、健康端点、基础设施里真实存在的键/服务名/topic），不写死期望数字。
+    容器状态、健康端点、Nacos 里真实注册的服务名、Kafka 里真实的 topic、Redis 探活+写读），
+    不写死期望数字。
+
+    注意 Redis **不检查业务缓存键**：`mv:*` 带 TTL，冷下来必然为空，拿它当判据会
+    把"缓存过期"误报成"Redis 挂了"（D26 二查踩过）。
 
 刻意不做的两件事：
     1. 不调 LLM 接口。那部分（四条链路）靠浏览器走查 + 截图，见 journal。
@@ -102,11 +106,19 @@ for svc, path, must in [
     except Exception as e:  # noqa: BLE001 - 验收脚本要把任何异常都记成失败
         check("健康端点 " + svc, False, repr(e))
 
-# ---------- 3. 基础设施里的真实痕迹 ----------
+# ---------- 3. 基础设施可用性 ----------
 
-rc, out = run(["docker", "exec", "mockverse-redis", "redis-cli", "KEYS", "mv:*"])
-keys = [k for k in out.split() if k.startswith("mv:")]
-check("Redis 缓存键", rc == 0 and len(keys) > 0, "命中 %d 个 mv:* 键" % len(keys))
+# Redis：**不检查业务缓存键是否存在**。`mv:*` 是带 TTL 的缓存，冷下来必然为空——
+# 拿它当判据会把"缓存过期"误报成"Redis 挂了"（D26 二查踩过）。改为探活 + 写读。
+rc, out = run(["docker", "exec", "mockverse-redis", "redis-cli", "PING"])
+probe_key = "d26:acceptance:probe"
+ok = rc == 0 and out.strip() == "PONG"
+if ok:
+    run(["docker", "exec", "mockverse-redis", "redis-cli", "SET", probe_key, "1", "EX", "10"])
+    rc2, val = run(["docker", "exec", "mockverse-redis", "redis-cli", "GET", probe_key])
+    run(["docker", "exec", "mockverse-redis", "redis-cli", "DEL", probe_key])
+    ok = rc2 == 0 and val.strip() == "1"
+check("Redis 可用", ok, "PING= %s，探针键写读=%s" % (out.strip(), "OK" if ok else "FAIL"))
 
 try:
     _, body = get_json("http://localhost:8848/nacos/v1/ns/service/list?pageNo=1&pageSize=20")
@@ -128,10 +140,14 @@ say("")
 if failures:
     say("FAILED: %d 项 -> %s" % (len(failures), ", ".join(failures)))
 else:
-    say("ALL PASS: compose 服务 %d 个全部健康，四个健康端点、Redis/Nacos/Kafka 痕迹齐全"
+    say("ALL PASS: compose 服务 %d 个全部健康，四个健康端点正常，Redis 可用，Nacos/Kafka 痕迹齐全"
         % len(expected))
 
 if OUT:
+    # 传进来的目录可能还不存在（例如 .d26tmp/）。**先建目录再写**——否则会在全部检查
+    # 通过之后抛 FileNotFoundError，退出码变 1，把"全 PASS"误报成失败。
+    out_dir = os.path.dirname(os.path.abspath(OUT))
+    os.makedirs(out_dir, exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 

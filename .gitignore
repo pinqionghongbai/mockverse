@@ -35,3 +35,7 @@ docs/evidence/**/*_out.txt
 
 # Playwright MCP 的截图与快照（D25 前端验证产物，不进仓库）
 .playwright-mcp/
+
+# Python
+__pycache__/
+*.pyc

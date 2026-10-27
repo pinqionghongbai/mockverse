@@ -87,6 +87,10 @@ PYTHONUTF8=1 python -I sse_timing.py <sessionId> http://localhost:8081   # 对�
 实测基准：直连 8081 → 52 chunk / spread 0.33s / 最后 0.1s 到达 27%；
 经 nginx → 53 chunk / spread 0.45s / 19%。被缓冲时 spread 趋近 0 且最后 0.1s 到达 >80%。
 
+> **D26 补充**：末段占比对**上游模型的突发吐字**敏感——实测出现过一次 79%（未过 80% 阈值），
+> 但 spread 仍有 0.56s，随后同路径复测 12%、直连 15%，说明是上游成簇到达而非 nginx 攒流。
+> **单次超阈值要结合 spread（≈0 才是真缓冲）与直连对照组判**，不要只看一个比例。
+
 > 这个脚本同时是 **D23 那条"证据脚本全文件扫描会假阳性"的同类教训**：
 > 验证方法本身写错，比被测对象有 bug 更危险。
 
@@ -94,7 +98,7 @@ PYTHONUTF8=1 python -I sse_timing.py <sessionId> http://localhost:8081   # 对�
 
 | 文件 | 用途 | 前置 |
 |---|---|---|
-| `local_acceptance.py` | 十容器健康 + 四个健康端点 + Redis/Nacos/Kafka 痕迹，一条命令 exit 0 | `docker compose up -d` |
+| `local_acceptance.py` | 十容器健康 + 四个健康端点 + Redis 探活/写读 + Nacos 注册 + Kafka topic，一条命令 exit 0 | `docker compose up -d` |
 
 ```bash
 # 在仓库根目录
@@ -103,6 +107,8 @@ PYTHONUTF8=1 python -I docs/evidence/D26/local_acceptance.py out.txt
 
 **容器数不写死**：由 `docker compose config --services` 现算，只校验"配置里的服务都起来了
 且健康"——D24 踩过"文档写 9、实际 10"的坑。
+**Redis 不检查 `mv:*` 缓存键**：那些键带 TTL，冷下来必然为空，拿它当判据会把"缓存过期"
+误报成"Redis 挂了"（D26 二查）。改为 `PING` + 一个 10s TTL 的探针键写读。
 
 不覆盖的部分：四条链路的可见结果（浏览器走查，见 `docs/journal/D26-2026-11-16.md` 第三节）、
 SSE 时序（`D24/sse_timing.py`）、A2A 信封（`D22/a2a_stream_once.py`）、MCP 用例（`D18/judge_probe.py`）。
