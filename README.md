@@ -1,5 +1,11 @@
 # MockVerse —— 基于 A2A / MCP 的多智能体面试陪练平台
 
+![Java](https://img.shields.io/badge/Java-21-orange?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.1-6DB33F?logo=springboot&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker%20Compose-10%20containers-2496ED?logo=docker&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-14%20passed-success)
+![License](https://img.shields.io/badge/license-not%20set-lightgrey)
+
 > 面向 Java 后端求职者的 AI 模拟面试系统：面试官 Agent 出题追问、RAG 知识库 Agent 答疑、
 > 简历诊断 Agent 结构化点评、MCP 判题工具真实编译运行代码。
 > 四个 Spring Boot 服务，**三个通过 A2A 协议互联**，判题服务以 **MCP 工具**形式接入。
