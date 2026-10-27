@@ -3,6 +3,7 @@ package com.mockverse.interview.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mockverse.interview.kafka.JudgeRequestMessage;
 import com.mockverse.interview.kafka.JudgeRequestProducer;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.support.SendResult;
@@ -14,6 +15,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 异步判题的提交登记 + 结果推送（D20）。
@@ -46,13 +52,36 @@ public class JudgeSubmissionService {
     /** SSE 连接上限：判题结果通常几秒内到达，给 5 分钟足够覆盖排队。 */
     private static final long SSE_TIMEOUT_MILLIS = 300_000L;
 
+    /**
+     * 心跳间隔（D26）。**不是可选项**：判题结果流在结果到达前一个字节都没有，
+     * 反向代理会把这样的响应一直攒在缓冲区里——实测 Cloudflare Tunnel 下客户端
+     * 24 秒收到 0 字节，而本地直连立刻收到。见 {@link #openStream} 的注释。
+     */
+    private static final long HEARTBEAT_SECONDS = 15L;
+
     /** 内存里最多留多少个提交。超过就清掉已完成的旧记录，防止长跑把堆吃满。 */
     private static final int MAX_TRACKED = 500;
 
     private final JudgeRequestProducer producer;
 
+    /**
+     * 心跳线程。**一个就够**：任务本身只是往 emitter 写几字节，真正的 I/O 在 Tomcat 里。
+     * daemon 线程，进程退出不阻塞。
+     */
+    private final ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "judge-sse-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
+
     private final Map<String, Submission> submissions = new ConcurrentHashMap<>();
     private final Map<Long, Set<SseEmitter>> emitters = new ConcurrentHashMap<>();
+
+    /** 进程关闭时收掉心跳线程，避免测试/热重启留下游离线程。 */
+    @PreDestroy
+    void shutdown() {
+        heartbeat.shutdownNow();
+    }
 
     /** 一个提交的当前状态。{@code result} 只在 {@code COMPLETED} 时非空。 */
     public record Submission(String submissionId, Long sessionId, String status,
@@ -141,14 +170,65 @@ public class JudgeSubmissionService {
         publish(done);
     }
 
-    /** 打开一个会话的结果流。同一会话可开多条，结果会推给所有连接。 */
+    /**
+     * 打开一个会话的结果流。同一会话可开多条，结果会推给所有连接。
+     *
+     * <p><b>为什么一连接就先发一条注释（D26）</b>：这条流在结果到达前**一个字节都没有**。
+     * 反向代理面对"响应头已发、body 迟迟不来"的连接，会把内容攒在缓冲区里等凑够一批再吐。
+     * 实测（Cloudflare Tunnel，D26）：判题 2 秒就完成了、服务端 {@code send()} 也没报错，
+     * 但隧道那侧的客户端 **24 秒收到 0 字节**；同一条流走本地 nginx 立刻收到 310 字节。
+     * 代价是前端整整等 60 秒超时后才降级轮询——功能没坏，体验坏了。
+     *
+     * <p>解法是 SSE 的标准做法：连上就先发一条 **注释帧**（`:` 开头，客户端按协议忽略），
+     * 让响应立刻有内容可转发；之后每 {@value #HEARTBEAT_SECONDS} 秒再补一条，
+     * 顺带防住中间层/NAT 的空闲断连。**别改成发 `data:` 帧**——前端会把 data 当结果解析。
+     */
     public SseEmitter openStream(Long sessionId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         Set<SseEmitter> set = emitters.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet());
         set.add(emitter);
-        emitter.onCompletion(() -> remove(sessionId, emitter));
-        emitter.onTimeout(() -> remove(sessionId, emitter));
-        emitter.onError(e -> remove(sessionId, emitter));
+
+        AtomicReference<ScheduledFuture<?>> beat = new AtomicReference<>();
+        Runnable stopHeartbeat = () -> {
+            ScheduledFuture<?> f = beat.get();
+            if (f != null) {
+                f.cancel(false);
+            }
+        };
+
+        emitter.onCompletion(() -> {
+            stopHeartbeat.run();
+            remove(sessionId, emitter);
+        });
+        emitter.onTimeout(() -> {
+            stopHeartbeat.run();
+            remove(sessionId, emitter);
+        });
+        emitter.onError(e -> {
+            stopHeartbeat.run();
+            remove(sessionId, emitter);
+        });
+
+        // 立刻发一条，逼中间层开始转发（见方法注释）
+        try {
+            emitter.send(SseEmitter.event().comment("connected"));
+        } catch (Exception e) {
+            log.warn("判题结果流首帧发送失败，丢弃该连接: session={}, {}", sessionId, e.getMessage());
+            stopHeartbeat.run();
+            remove(sessionId, emitter);
+            return emitter;
+        }
+
+        beat.set(heartbeat.scheduleAtFixedRate(() -> {
+            try {
+                emitter.send(SseEmitter.event().comment("ping"));
+            } catch (Exception e) {
+                // 客户端已走：停掉心跳并移除，别让线程一直往死连接写
+                stopHeartbeat.run();
+                remove(sessionId, emitter);
+            }
+        }, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS));
+
         log.info("判题结果流已连接: session={}, 当前连接数={}", sessionId, set.size());
         return emitter;
     }

@@ -106,6 +106,79 @@ function addMessage(role, text, who) {
   return bubble;
 }
 
+// ---------------------------------------------------------------------------
+// 轻量 Markdown（只给"最终消息"用）
+// ---------------------------------------------------------------------------
+//
+// 为什么需要（D26）：知识库 Agent 的回答是 Markdown（`**加粗**`、`- 列表`、
+// `` `代码` ``），但气泡一直用 textContent 塞纯文本——界面上直接显示成
+// "**Redis 过期删除策略**"，手机上满屏星号。验收标准是"非技术朋友能看懂"，
+// 满屏语法符号不合格。
+//
+// 为什么自己写 20 行而不是引 marked：整个前端零依赖零构建是 D25 的既定选择，
+// 为四个语法引一个库不划算。
+//
+// **顺序不能反**：先转义 HTML 再套标签。反过来的话，模型输出里的 `<script>`
+// 会被当成标签执行——回答来自 LLM，而 LLM 的输入里有候选人贴的内容。
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** 行内：`code` 与 **bold**。入参必须已经转义过。 */
+function inlineMd(s) {
+  return s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+/** 只支持标题 / 无序列表 / 空行分段，够用且不会误伤。 */
+function mdToHtml(text) {
+  const lines = escapeHtml(text || '').split('\n');
+  const parts = [];
+  let list = null;
+  const flushList = () => {
+    if (list) {
+      parts.push('<ul>' + list.join('') + '</ul>');
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) {
+      if (!list) list = [];
+      list.push('<li>' + inlineMd(li[1]) + '</li>');
+      continue;
+    }
+    flushList();
+    if (!line.trim()) {
+      parts.push('');                 // 空行 = 段落分隔，下面统一换成 <br>
+      continue;
+    }
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    if (h) {
+      parts.push('<div class="md-h">' + inlineMd(h[1]) + '</div>');
+      continue;
+    }
+    parts.push(inlineMd(line));
+  }
+  flushList();
+
+  return parts.join('<br>')
+    .replace(/(<br>){3,}/g, '<br><br>')      // 连续空行压成一个段落间距
+    // 块级元素前后不留换行（它们自带 margin）。
+    // **必须是 `(?:<br>)+`**：写成 `<br>+` 时 `+` 修饰的是 `>`，只能匹配一个。
+    .replace(/(?:<br>)+(<ul>)/g, '$1')
+    .replace(/(<\/ul>)(?:<br>)+/g, '$1')
+    .replace(/(<\/div>)(?:<br>)+/g, '$1');
+}
+
 function showToolHint(toolName) {
   removeToolHint();
   const hint = document.createElement('div');
@@ -312,6 +385,9 @@ async function sendAnswer() {
   let bubble = null;
   let bubbleAuthor = null;
   let finished = false;
+  // 本轮生成的气泡：流式期间按纯文本追加（增量无法安全地半截渲染 Markdown），
+  // 收尾时统一渲染一次。见 mdToHtml 的注释。
+  const agentBubbles = [];
 
   try {
     await streamPost(
@@ -336,6 +412,7 @@ async function sendAnswer() {
           if (!bubble || author !== bubbleAuthor) {
             bubble = addMessage('agent', '', agentLabel(author));
             bubbleAuthor = author;
+            agentBubbles.push(bubble);
           }
           bubble.textContent += evt.delta;
           scrollToBottom();
@@ -366,6 +443,11 @@ async function sendAnswer() {
   } catch (e) {
     addMessage('system', '发送失败：' + e.message, '错误');
   } finally {
+    // 流结束后统一渲染 Markdown：此时气泡里的 textContent 是完整纯文本，
+    // 一次性转成 HTML 才不会出现"半个 ** 被吃掉"的中间态。
+    for (const b of agentBubbles) {
+      b.innerHTML = mdToHtml(b.textContent);
+    }
     removeToolHint();
     setBusy(false);
     el.taAnswer.focus();
@@ -395,6 +477,8 @@ async function submitJudge() {
   const streamUrl = '/api/interview/' + state.sessionId + '/judge/stream';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
+  // 轮询的停止开关放在 try 外面：finally 也要能停掉它（提前返回/抛错时）
+  const pollCtl = { stop: false };
 
   try {
     // 结果流用 GET。注意这里不是 fetch 的 streamPost（那个是 POST），
@@ -446,14 +530,31 @@ async function submitJudge() {
     }
     const submitted = await resp.json();
 
-    const evt = await streamPromise;
-    if (!evt) {
-      // 流断了但提交成功：退化为轮询（D20 的兜底接口）
-      setJudgeStatus('结果流断开，改用轮询…', 'warn');
-      const evt2 = await pollJudge(state.sessionId, submitted.submissionId);
-      renderJudgeResult(evt2);
-    } else {
+    // 判题结果有两条路，**并行跑、谁先到用谁**（D26）：
+    //  ① SSE 结果流：本地/局域网下最快，推送即到；
+    //  ② 轮询：以前只是"流断了才用"的兜底，现在必须从一开始就并行跑。
+    //     原因是**中间层会压住"长时间没有数据"的响应**：实测经 Cloudflare Tunnel
+    //     提交后判题 1.2 秒就完成了、服务端也推送成功，但客户端 24 秒收到 0 字节，
+    //     要等 SSE 的 60s 超时才降级轮询——用户白等一分钟。
+    //     独立实验（.d26tmp/probe）证明这与响应体大小无关：先发 4KB 再静默，同样收不到。
+    // 流没拿到结果时让它永远不完成，避免 null 抢先赢得竞速。
+    const pollPromise = pollJudge(state.sessionId, submitted.submissionId, pollCtl);
+    const evt = await Promise.race([
+      streamPromise.then((e) => e || new Promise(() => {})),
+      pollPromise,
+    ]).catch(() => null);
+
+    if (evt) {
+      pollCtl.stop = true;
       renderJudgeResult(evt);
+    } else {
+      // 两条路都没结果：把轮询的最终状态如实说出来，不再假装是"流断开"
+      const last = await pollPromise;
+      if (last) {
+        renderJudgeResult(last);
+      } else {
+        throw new Error('判题结果超时（60s）');
+      }
     }
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -464,14 +565,19 @@ async function submitJudge() {
   } finally {
     clearTimeout(timeout);
     controller.abort();
+    pollCtl.stop = true;      // 任何退出路径都停掉轮询，别让它在后台继续打接口
     el.btnJudge.disabled = false;
-  }
-}
+  }}
 
-/** 轮询兜底（SSE 不可用时）。最多等 60s。 */
-async function pollJudge(sessionId, submissionId) {
+/**
+ * 轮询取判题结果。最多等 60s，超时返回 null（**不抛**，方便和 SSE 竞速时统一处理）。
+ *
+ * @param ctl 可选的 `{stop:boolean}`：SSE 先拿到结果时置 true，让轮询立刻收手，
+ *            否则它会继续每秒钟打一次接口直到 60s。
+ */
+async function pollJudge(sessionId, submissionId, ctl) {
   const deadline = Date.now() + 60000;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !(ctl && ctl.stop)) {
     const resp = await fetch('/api/interview/' + sessionId + '/judge/' + submissionId);
     if (resp.ok) {
       const s = await resp.json();
@@ -481,7 +587,7 @@ async function pollJudge(sessionId, submissionId) {
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new Error('轮询超时');
+  return null;
 }
 
 function setJudgeStatus(text, kind) {

@@ -206,6 +206,27 @@ textarea#taCode, textarea#taStdin, textarea#taExpected {
   word-break: break-word;
 }
 
+/* 气泡里的 Markdown 片段（D26）：mdToHtml 只产出这几种标签。
+   pre-wrap 只该作用于纯文本——列表若继承它，缩进会翻倍。 */
+.msg .bubble ul {
+  margin: 6px 0;
+  padding-left: 20px;
+  white-space: normal;
+}
+.msg .bubble li { margin: 2px 0; }
+.msg .bubble .md-h {
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+.msg .bubble code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+
 .msg.user { align-self: flex-end; align-items: flex-end; }
 .msg.user .bubble { background: var(--user-bubble); border-color: #33507a; }
 
