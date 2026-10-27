@@ -3,6 +3,8 @@ package com.mockverse.knowledge.rag;
 import com.mockverse.knowledge.config.VectorProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -16,6 +18,31 @@ public class KnowledgeService {
     private final KnowledgeLoader loader;
     private final PgVectorStore store;
     private final VectorProperties properties;
+
+    /**
+     * 启动时自动灌语料（D29 修）。
+     *
+     * <p><b>为什么必须有这一条</b>：`ensureIndexed()` 之前**没有任何调用方**——它是个死方法。
+     * 开发期语料是 D10 手工调 `POST /reindex` 灌进去的，而 `pg-data` 卷一直没删，
+     * 所以问题一直没暴露。**换一台机器/新建卷，知识库就是空的**：RAG 对任何问题都答
+     * "知识库未覆盖"，而且看起来像"检索没命中"，不像"库是空的"。
+     *
+     * <p><b>为什么挂在 {@code ApplicationReadyEvent} 而不是 {@code @PostConstruct}</b>：
+     * 灌库要跑 50 条 ONNX 推理（数秒），放在 `@PostConstruct` 会拖慢 Tomcat 就绪、
+     * 让健康检查超时。就绪后再灌，服务先能对外响应，灌完日志里能看到块数。
+     *
+     * <p><b>失败不阻断启动</b>：pg 没起时 `store.count()` 会抛，这里吞掉并告警——
+     * 知识库不可用不该让整个服务起不来（与 `ResilientMcpToolset` 同一原则）。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void seedOnStartup() {
+        try {
+            int n = ensureIndexed();
+            log.info("知识库就绪: {} 块", n);
+        } catch (Exception e) {
+            log.warn("启动灌语料失败（服务继续运行，可稍后调 POST /reindex）: {}", e.getMessage());
+        }
+    }
 
     /**
      * 幂等入库：库里已有数据就跳过。
