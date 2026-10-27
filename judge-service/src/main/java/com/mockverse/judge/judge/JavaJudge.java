@@ -186,7 +186,8 @@ public class JavaJudge {
     /**
      * 文件名该叫什么：{@code public} 类型存在时只能是它（javac 的硬约束），否则返回 null。
      */
-    private static String detectPublicType(String code) {
+    /** package-private 仅为单测可见（JavaJudgeClassDetectionTest），不要在业务代码里直接调。 */
+    static String detectPublicType(String code) {
         Matcher pub = PUBLIC_TYPE.matcher(mask(code));
         return pub.find() ? pub.group(1) : null;
     }
@@ -212,7 +213,8 @@ public class JavaJudge {
      * 仍可能误判的是**文本块里的伪代码**（已按字符串抹掉，不会命中）与 `$` 嵌套类的调用形式
      * （{@code java Outer$Inner}）——后者不在面试题的常见写法里。
      */
-    private static String detectMainClass(String code) {
+    /** package-private 仅为单测可见（JavaJudgeClassDetectionTest），不要在业务代码里直接调。 */
+    static String detectMainClass(String code) {
         String masked = mask(code);
         Matcher main = MAIN_METHOD.matcher(masked);
         if (!main.find()) {

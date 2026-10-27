@@ -137,11 +137,13 @@ public class QuestionCache {
      * 两个完全不同的查询共享缓存，返回错的题。Base64 URL 字母表是 {@code A-Za-z0-9-_}，
      * **不含冒号**，所以分隔符不会再被值吃掉，拼接结果是单射的。
      */
-    private static String key(String category, String difficulty) {
+    /** package-private 仅为单测可见（QuestionCacheKeyTest），不要在业务代码里直接调。 */
+    static String key(String category, String difficulty) {
         return KEY_PREFIX + dim(category) + ":" + dim(difficulty);
     }
 
-    private static String dim(String value) {
+    /** package-private 仅为单测可见（QuestionCacheKeyTest）。 */
+    static String dim(String value) {
         if (value == null || value.isBlank()) {
             return "any";
         }

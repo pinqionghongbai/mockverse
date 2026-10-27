@@ -31,6 +31,12 @@ services:
       - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+      # **建表脚本必须自动执行**（D29）：镜像由空卷初始化时才跑一次。
+      # 挂在入口脚本目录里，用 MySQL 官方机制，不额外写初始化代码。
+      # 源文件直接取 interview-service 的资源，**不复制副本**——避免三份 DDL 各自漂移
+      # （resume-service 下那份与它逐字一致，D21 已 diff 过）。
+      # ⚠️ 只在 **mysql-data 卷为空** 时执行；已有库里表存在则不会覆盖。
+      - ./interview-service/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     command:
       # 中文排序与大小写：建表 SQL 里用的是 utf8mb4，这里显式对齐
       - --character-set-server=utf8mb4

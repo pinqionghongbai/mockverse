@@ -69,5 +69,13 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+
+        <!-- D29: 单测。与 interview-service 同一份口径（父 POM 已管版本）。
+             这里只测纯函数（类名识别），不起 Spring 上下文、不需要 Kafka。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
