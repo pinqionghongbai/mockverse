@@ -64,6 +64,12 @@ const state = {
   busy: false,
   /** 当前"正在判题…"提示元素。收到任意后续事件时移除。 */
   toolHint: null,
+  /**
+   * 会话级判题结果流（D26 二修）。**只开一条、多次提交复用**。
+   * 见 judgeStream() 的注释：每次提交都新开一条的话，旧连接要等服务端下次写入失败
+   * 才会被回收，日志里会持续刷 "当前连接数=N" + Broken pipe。
+   */
+  judgeStream: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -458,6 +464,94 @@ async function sendAnswer() {
 // 判题
 // ---------------------------------------------------------------------------
 
+/**
+ * 会话级判题结果流：**同一会话只开一条，多次提交复用**（D26 二修）。
+ *
+ * 为什么不能每次提交都开一条：SSE 客户端 `abort()` 之后，服务端**要等到下一次写入
+ * 失败**才知道对端走了（`SseEmitter` 没有主动探测）。于是每次判题都留一条僵尸连接，
+ * 服务端日志里 `当前连接数` 一路涨、下次推送时报 `Broken pipe`（D26 实测到的 WARN 噪音）。
+ * 复用一条流，连接数恒定为 1。
+ *
+ * 结果按 `submissionId` 分发：流上收到的事件先进 `recent`，有等待者就直接给。
+ * 这样即使结果比 `POST` 的响应先到，也不会丢。
+ */
+function judgeStream(sessionId) {
+  if (state.judgeStream && !state.judgeStream.dead) {
+    return state.judgeStream;
+  }
+
+  const s = {
+    /** submissionId → resolve 回调 */
+    waiters: new Map(),
+    /** submissionId → 已到达但还没人领的结果（防"结果比 POST 响应先到"） */
+    recent: new Map(),
+    dead: false,
+    /** 首次 `fetch` 拿到响应头后置 true——用来决定提交前要不要等 300ms */
+    ready: false,
+    controller: new AbortController(),
+  };
+
+  (async () => {
+    try {
+      const resp = await fetch('/api/interview/' + sessionId + '/judge/stream',
+        { signal: s.controller.signal });
+      if (!resp.ok) throw new Error('结果流连不上：' + resp.status);
+      s.ready = true;
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        buffer = parseSse(buffer, (payload) => {
+          let evt;
+          try { evt = JSON.parse(payload); } catch (_) { return; }   // 注释帧/坏帧忽略
+          const w = s.waiters.get(evt.submissionId);
+          if (w) {
+            s.waiters.delete(evt.submissionId);
+            w(evt);
+          } else {
+            s.recent.set(evt.submissionId, evt);
+            // 只留最近 20 条：没人领的结果没有任何价值，攒着只会占内存
+            while (s.recent.size > 20) {
+              s.recent.delete(s.recent.keys().next().value);
+            }
+          }
+        });
+      }
+    } catch (_) {
+      // 网络错误 / abort：落到下面统一标记死亡，由调用方走轮询兜底
+    }
+    s.dead = true;
+    // 流断了：把还在等的人全部放掉（返回 null），他们会去轮询
+    for (const [, w] of s.waiters) w(null);
+    s.waiters.clear();
+    if (state.judgeStream === s) {
+      state.judgeStream = null;
+    }
+  })();
+
+  state.judgeStream = s;
+  return s;
+}
+
+/**
+ * 等某个提交的结果。流已断或已死时立刻返回 null（调用方靠轮询）。
+ * **不会永久 pending**——否则 `Promise.race` 里它会让超时兜底失效。
+ */
+function awaitJudgeResult(s, submissionId) {
+  const cached = s.recent.get(submissionId);
+  if (cached) {
+    s.recent.delete(submissionId);
+    return Promise.resolve(cached);
+  }
+  if (s.dead) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => s.waiters.set(submissionId, resolve));
+}
+
 async function submitJudge() {
   const code = el.taCode.value.trim();
   if (!code) {
@@ -473,43 +567,22 @@ async function submitJudge() {
   setJudgeStatus('已提交，等待判题结果…', 'warn');
   el.judgeResult.hidden = true;
 
-  // 先开结果流，再提交——反过来的话可能判得太快、结果在订阅前就推过了
-  const streamUrl = '/api/interview/' + state.sessionId + '/judge/stream';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  // 先有结果流，再提交——反过来的话可能判得太快、结果在订阅前就推过了。
+  // 流是会话级复用的（见 judgeStream 注释），不是每次提交都新开。
+  const stream = judgeStream(state.sessionId);
   // 轮询的停止开关放在 try 外面：finally 也要能停掉它（提前返回/抛错时）
   const pollCtl = { stop: false };
+  /** POST 成功后才有值；finally 用它清掉等待者（见 finally 的注释） */
+  let submittedId = null;
+  // 60s 总闸：只停轮询。若 SSE 那时也没给结果，下面的 `await pollPromise` 会拿到 null
+  // 并抛超时——**不能**改成 abort 流，那会让"流先到但慢"的正常路径误伤。
+  const timeout = setTimeout(() => { pollCtl.stop = true; }, 60000);
 
   try {
-    // 结果流用 GET。注意这里不是 fetch 的 streamPost（那个是 POST），
-    // 单独写一小段，但复用同一个 SSE 解析器。
-    // 立即挂一个 catch：若下面的 POST 先失败，我们会跳进 catch 分支，
-  // streamPromise 永远不会被 await，而 finally 里的 abort() 会让它 reject——
-  // 那会变成一个"未处理的 Promise 拒绝"，在控制台里冒红字（D25 二查）。
-  // 这里先兜住，真正的错误由后续 await 处理。
-  const streamPromise = (async () => {
-      const resp = await fetch(streamUrl, { signal: controller.signal });
-      if (!resp.ok) throw new Error('结果流连不上：' + resp.status);
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return null;
-        buffer += decoder.decode(value, { stream: true });
-        let found = null;
-        buffer = parseSse(buffer, (payload) => {
-          try { found = JSON.parse(payload); } catch (_) { /* ignore */ }
-        });
-        if (found) {
-          controller.abort();
-          return found;
-        }
-      }
-    })().catch(() => null);   // abort / 网络错误都归一成 null，由调用方走轮询兜底
-
-    // 稍等一下让流连上，再提交
-    await new Promise((r) => setTimeout(r, 300));
+    // 稍等一下让**首次**连接建立（已连上的会话这里等于空转 300ms）
+    if (!stream.ready) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
 
     const body = { code };
     if (el.taStdin.value.trim()) body.stdin = el.taStdin.value;
@@ -529,6 +602,7 @@ async function submitJudge() {
       throw new Error(detail);
     }
     const submitted = await resp.json();
+    submittedId = submitted.submissionId;
 
     // 判题结果有两条路，**并行跑、谁先到用谁**（D26）：
     //  ① SSE 结果流：本地/局域网下最快，推送即到；
@@ -536,11 +610,11 @@ async function submitJudge() {
     //     原因是**中间层会压住"长时间没有数据"的响应**：实测经 Cloudflare Tunnel
     //     提交后判题 1.2 秒就完成了、服务端也推送成功，但客户端 24 秒收到 0 字节，
     //     要等 SSE 的 60s 超时才降级轮询——用户白等一分钟。
-    //     独立实验（.d26tmp/probe）证明这与响应体大小无关：先发 4KB 再静默，同样收不到。
-    // 流没拿到结果时让它永远不完成，避免 null 抢先赢得竞速。
+    //     独立实验（docs/evidence/D26/sse_probe_server.py）证明这与响应体大小无关：
+    //     先发 4KB 再静默，同样收不到。
     const pollPromise = pollJudge(state.sessionId, submitted.submissionId, pollCtl);
     const evt = await Promise.race([
-      streamPromise.then((e) => e || new Promise(() => {})),
+      awaitJudgeResult(stream, submitted.submissionId),
       pollPromise,
     ]).catch(() => null);
 
@@ -564,10 +638,13 @@ async function submitJudge() {
     }
   } finally {
     clearTimeout(timeout);
-    controller.abort();
     pollCtl.stop = true;      // 任何退出路径都停掉轮询，别让它在后台继续打接口
+    // **清掉本次的等待者**：超时/异常退出时结果可能永远不来，
+    // 留在 Map 里就是一条只增不减的泄漏（流不断的话它活到换场）。
+    if (submittedId) stream.waiters.delete(submittedId);
     el.btnJudge.disabled = false;
-  }}
+  }
+}
 
 /**
  * 轮询取判题结果。最多等 60s，超时返回 null（**不抛**，方便和 SSE 竞速时统一处理）。
@@ -671,6 +748,12 @@ el.taAnswer.addEventListener('keydown', (e) => {
 
 el.btnNew.addEventListener('click', () => {
   if (state.busy) return;
+  // 判题结果流绑的是**上一个会话**，换场必须断开，否则新会话的结果会推给旧流
+  // （服务端按 sessionId 分发，旧流永远收不到新会话的结果 → 只能靠轮询兜底）
+  if (state.judgeStream) {
+    state.judgeStream.controller.abort();
+    state.judgeStream = null;
+  }
   state.sessionId = null;
   state.round = 0;
   el.messages.innerHTML = '';

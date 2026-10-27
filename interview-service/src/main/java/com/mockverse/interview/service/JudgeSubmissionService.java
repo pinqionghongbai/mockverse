@@ -19,7 +19,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 异步判题的提交登记 + 结果推送（D20）。
@@ -65,10 +64,16 @@ public class JudgeSubmissionService {
     private final JudgeRequestProducer producer;
 
     /**
-     * 心跳线程。**一个就够**：任务本身只是往 emitter 写几字节，真正的 I/O 在 Tomcat 里。
-     * daemon 线程，进程退出不阻塞。
+     * 心跳线程池。
+     *
+     * <p><b>为什么不是单线程</b>（D26 二修）：{@code SseEmitter.send()} 是**同步写 socket**
+     * （`ResponseBodyEmitter.send` 上是 `ACC_SYNCHRONIZED`，`javap -v` 已核）。客户端读得慢时
+     * 调用线程会阻塞在写缓冲上——单线程调度器下，**一个慢客户端会让所有连接的心跳一起停**。
+     * 2 个线程覆盖单机演示规模；真要几十个并发连接，改成每连接独立任务或交给容器线程池。
+     *
+     * <p>daemon 线程，进程退出不阻塞。
      */
-    private final ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+    private final ScheduledExecutorService heartbeat = Executors.newScheduledThreadPool(2, r -> {
         Thread t = new Thread(r, "judge-sse-heartbeat");
         t.setDaemon(true);
         return t;
@@ -77,9 +82,14 @@ public class JudgeSubmissionService {
     private final Map<String, Submission> submissions = new ConcurrentHashMap<>();
     private final Map<Long, Set<SseEmitter>> emitters = new ConcurrentHashMap<>();
 
+    /** emitter → 它的心跳任务。**移除连接时必须一并取消**，见 {@link #remove}。 */
+    private final Map<SseEmitter, ScheduledFuture<?>> heartbeats = new ConcurrentHashMap<>();
+
     /** 进程关闭时收掉心跳线程，避免测试/热重启留下游离线程。 */
     @PreDestroy
     void shutdown() {
+        heartbeats.values().forEach(f -> f.cancel(false));
+        heartbeats.clear();
         heartbeat.shutdownNow();
     }
 
@@ -188,43 +198,26 @@ public class JudgeSubmissionService {
         Set<SseEmitter> set = emitters.computeIfAbsent(sessionId, k -> ConcurrentHashMap.newKeySet());
         set.add(emitter);
 
-        AtomicReference<ScheduledFuture<?>> beat = new AtomicReference<>();
-        Runnable stopHeartbeat = () -> {
-            ScheduledFuture<?> f = beat.get();
-            if (f != null) {
-                f.cancel(false);
-            }
-        };
-
-        emitter.onCompletion(() -> {
-            stopHeartbeat.run();
-            remove(sessionId, emitter);
-        });
-        emitter.onTimeout(() -> {
-            stopHeartbeat.run();
-            remove(sessionId, emitter);
-        });
-        emitter.onError(e -> {
-            stopHeartbeat.run();
-            remove(sessionId, emitter);
-        });
+        // 三条终止回调都收敛到 remove()：心跳在 remove 里统一取消，
+        // 不再需要每个回调各记一份 stopHeartbeat（D26 二修）
+        emitter.onCompletion(() -> remove(sessionId, emitter));
+        emitter.onTimeout(() -> remove(sessionId, emitter));
+        emitter.onError(e -> remove(sessionId, emitter));
 
         // 立刻发一条，逼中间层开始转发（见方法注释）
         try {
             emitter.send(SseEmitter.event().comment("connected"));
         } catch (Exception e) {
             log.warn("判题结果流首帧发送失败，丢弃该连接: session={}, {}", sessionId, e.getMessage());
-            stopHeartbeat.run();
             remove(sessionId, emitter);
             return emitter;
         }
 
-        beat.set(heartbeat.scheduleAtFixedRate(() -> {
+        heartbeats.put(emitter, heartbeat.scheduleAtFixedRate(() -> {
             try {
                 emitter.send(SseEmitter.event().comment("ping"));
             } catch (Exception e) {
-                // 客户端已走：停掉心跳并移除，别让线程一直往死连接写
-                stopHeartbeat.run();
+                // 客户端已走：remove 会取消这个任务本身（cancel(false) 从任务内部调用是安全的）
                 remove(sessionId, emitter);
             }
         }, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS));
@@ -255,10 +248,23 @@ public class JudgeSubmissionService {
         }
     }
 
+    /**
+     * 移除一条连接，**并取消它的心跳**。
+     *
+     * <p>心跳必须在这里停（D26 二修）：推送失败（{@link #publish} 的 catch）也走这条路，
+     * 而原先只有 {@code onCompletion/onTimeout/onError} 会停心跳——于是"推送失败被移除"
+     * 的连接还会被心跳继续写，每 15 秒失败一次才自己停，白跑一轮且刷日志。
+     *
+     * <p>幂等：重复调用只会多做一次 {@code set.remove} 与 {@code Map.remove}。
+     */
     private void remove(Long sessionId, SseEmitter emitter) {
         Set<SseEmitter> set = emitters.get(sessionId);
         if (set != null) {
             set.remove(emitter);
+        }
+        ScheduledFuture<?> beat = heartbeats.remove(emitter);
+        if (beat != null) {
+            beat.cancel(false);
         }
     }
 
