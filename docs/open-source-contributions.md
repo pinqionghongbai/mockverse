@@ -168,4 +168,160 @@ Thanks again for the quick turnaround on triage.
 
 **注意**：编辑后 issue 的 `waiting on reporter` label 应会由维护者更新；若后续 reviewer 要求改动，
 改完在 PR 回复的同时**在 issue 补一句 `updated the PR`**，避免被当成 stale 关闭。
-## 2.（预留）后续 PR / 其他贡献
+## 2. google/adk-java — Issue #1718（2026-10-28）
+
+**Issue 链接**: https://github.com/google/adk-java/issues/1718（open，署名 pinqionghongbai）
+**标题**: AgentExecutor ignores the A2A contextId when creating a session, so multi-turn
+conversations start over every turn
+
+**来源**：D16 的九查在 MockVerse 实测里发现「同一 contextId 第二轮问不出第一轮内容」，
+当时判断为上游 bug 并挂 STATUS 挂起表（理由：修它要 fork ADK 或写子类）。本次回访上游时
+确认该缺陷在最新 `main`（`7ed0a93`）仍然存在，且上游无同类 issue/PR，遂补上可复现证据后提交。
+
+**证据构成（比 #1686 更硬）**：
+
+| 项 | 内容 |
+|---|---|
+| 复现方式 | 确定性单测 `ContextIdSessionReuseTest`（3 例，只用公开 API），不依赖网络/时序 |
+| 基线 | `origin/main` @ `7ed0a93`（不是旧版本残留） |
+| 回归证明 | 移除修复后 3 例全失败；其中「第二轮只看到 1 条事件」是用户可感知症状 |
+| 修复验证 | 补上后 a2a 模块 142 用例 / 0 失败 |
+| 版本一致性 | `AgentExecutor` / `BaseSessionService` / `InMemorySessionService` 在 `v1.13.0` 与 `7ed0a93` 之间无差异 |
+
+**根因（三层）**：
+
+1. `AgentExecutor.prepareSession`（`a2a/.../executor/AgentExecutor.java:312-321`）用
+   `ctx.getContextId()` 查 session，创建时却调 `createSession(appName, userId)`。
+2. 该重载 = `createSession(appName, userId, null, null)`
+   （`core/.../BaseSessionService.java:111-113`）。
+3. `InMemorySessionService` 收到 null 就生成 UUID
+   （`InMemorySessionService.java:144-148`）→ 存进去的 id ≠ contextId → 下一轮永远查不到。
+
+**顺带发现的第二个缺陷**（已拆成独立 PR，未混进本条）：
+`EventConverter` 读 `adk_task_id` / `adk_context_id`，而 `ResponseConverter` 经
+`AdkMetadataKey` 写的是 `a2a:task_id` / `a2a:context_id`。全仓无人写 `adk_*`，
+所以两个访问器恒返回空串；`EventConverterTest` 用同一个常量造事件再读，自洽掩盖了缺陷。
+
+**主动交代的边界（写进 issue 而非回避）**：
+
+- 并发首轮竞态：同 contextId 两个首轮可双双 create，`OVERWRITE` 下静默丢事件、`REJECT` 下抛异常
+- `VertexAiSessionService` 的 id 规则比本地校验更窄（后端要小写字母开头，UUID 首位约 10/16 是数字）
+- `RemoteA2AAgent.prepareMessage` 普通追问轮根本不发 contextId；Python 有
+  `forward_session_id_as_context_id` 配置，Java 无对应物——明确划为设计决策，另议
+
+**下一步（待办）**：
+
+- [x] 提交 issue #1718（2026-10-28）
+- [x] 修复补丁 + 测试已备好并通过干净基线验证（`docs/patches/0001-a2a-context-id-session.patch`）
+- [x] 2026-10-28 复现复核：全新 worktree（`origin/main` @ `7ed0a93`，主代码零改动、只加测试）
+      两个缺陷均稳定复现；诊断输出显示同一 contextId 两轮拿到两个不同 UUID session，
+      第二轮仍只看到 1 条事件；`getSession("context-1")` 返回 `EMPTY`
+- [x] 2026-10-28 对抗复核：用真实 `RequestContext`（非 mock）、无 contextId 请求、
+      不同 contextId、`REJECT` 严格模式、双线程 barrier 竞态共 5 项验证，
+      修复全部成立；**同时推翻了自己在 issue 里的一条错误断言**（见下）
+- [x] 并发竞态修复已并入主 PR（`onErrorResumeNext` 仅在 "already exists" 时重查一次）
+- [ ] 待维护者回应后决定是否同时提交并发竞态修复 ← 已提前完成，等待 review 反馈
+
+**复核中发现并修正的一处错误结论**：
+
+初稿 issue 写「`OVERWRITE` 下并发首轮会静默替换并丢弃事件」。实测（双线程 barrier
+强制两个请求都先读到空）结果相反：`OVERWRITE` 下 2 次 create、2 个 agent 都跑、
+**2 条事件都在**——被替换的是刚创建的空 session，两个 turn 随后都 append 到同一 id。
+真正的问题是 `REJECT`：2 次 create 只有 1 个 agent 跑，另一个请求以 `FAILED` 收场。
+据此把修复从「只传 contextId」扩展为「再补一次 already-exists 重查」，并把勘误
+评论公开提交（2026-10-28 12:14）：
+https://github.com/google/adk-java/issues/1718#issuecomment-6460493156
+
+**教训**：issue 里的竞态后果是推理出来的，不是测出来的；公开仓库的断言必须实测，
+否则会在上游留下错误结论。与 D16「措辞被十五查推翻」是同一类错误。
+
+**issue 关联方式定为 `Refs` 而非 `Fixes`（2026-10-28 决定）**：issue 报告的**第二个缺陷
+（`EventConverter` 读错元数据键）未被主 PR 修复**，若用 `Fixes #1718`，PR 合并时 GitHub
+会自动关闭 issue，留下未修的缺陷且无人再追。因此改为 `Refs`，第二个缺陷走独立 PR，
+两个都合并后再由维护者关闭 issue。
+
+**可复现证据（不依赖任何临时脚本）**：
+
+1. **看 diff**——主 PR 只改了 3 个文件，`EventConverter.java` 不在其中：
+   ```bash
+   git diff --name-only origin/main...fix/a2a-context-id-session
+   # a2a/src/main/java/com/google/adk/a2a/executor/AgentExecutor.java
+   # a2a/src/test/java/com/google/adk/a2a/executor/ContextIdEndToEndTest.java
+   # a2a/src/test/java/com/google/adk/a2a/executor/ContextIdSessionReuseTest.java
+   ```
+2. **跑测试**——把元数据补丁里的 `ContextIdRoundTripTest`（已提交、可追溯）单独放到
+   PR 分支上跑，仍失败：
+   ```bash
+   git apply --include="a2a/src/test/java/com/google/adk/a2a/converters/ContextIdRoundTripTest.java" \
+     docs/patches/0001-a2a-metadata-keys.patch
+   ./mvnw -pl a2a -Dtest=ContextIdRoundTripTest test
+   # ContextIdRoundTripTest.taskToEvent_thenContextId_returnsThePeerContextId
+   #   value of: contextId(...)  expected: context-1  but was an empty string
+   # Tests run: 1, Failures: 1
+   ```
+
+> **教训（第二次犯）**：第一次是 issue 里的 `OVERWRITE` 断言，这次是引用一个已删除的临时
+> 测试当"实证"。**凡是写进文档或上游的断言，必须给出别人能独立重跑的命令**，不能只贴
+> 一段自己跑过、代码已不存在的输出。
+
+- [x] 2026-10-28 **PR #1719 已提交**：https://github.com/google/adk-java/pull/1719
+      （open，1 commit / 3 files / +462 −6，`cla/google` ✅、`check-changes` ✅；
+      其余 workflow 为 `action_required`，等维护者批准运行）
+- [x] 2026-10-28 提交后自查：发现两处新测试用了已废弃的 `Session.events()`，
+      改为 `immutableEvents()` 后 `--amend` + `--force-with-lease` 推送（`08e28fb` → `9e8dd4f`）
+- [ ] 第二个缺陷（元数据键）的独立 PR 待发
+
+**验证口径（避免踩坑）**：改动 `static final String` 常量后，同目录增量编译会复用旧测试类
+（javac 内联常量），必须先 `rm -rf a2a/target/{classes,test-classes}` 再跑，否则出现与改动
+无关的假失败——本次复核就撞到过一次，已记入 PR 文档。
+
+**用例数口径**（a2a 模块，基线 `origin/main` = 139）：
+
+| 组合 | 用例数 | 结果 |
+|---|---|---|
+| 主修复（+5 单测 +2 端到端） | 146 | 0 失败，连跑 3 次稳定 |
+| 元数据键修复（+2） | 141 | 0 失败 |
+| 两者叠加（按顺序 `git am`） | 148 | 0 失败，无冲突 |
+
+**CI 同款命令**（`validation.yml` 实际执行的是 `./mvnw -Prelease clean package` +
+`git diff --exit-code`）：
+
+| 检查 | 结果 |
+|---|---|
+| `./mvnw -Prelease -pl a2a -am clean package` | ✅ BUILD SUCCESS：core **2988** / a2a **146**，0 失败 |
+| `git diff --exit-code`（格式未被改写） | ✅ 干净，fmt 0 reformatted |
+
+**上游漂移复核（2026-10-28 晚）**：`7ed0a93` → `461f7d6`（8 个新提交，含
+`SessionUtils` / `FirestoreSessionService` 改动）。两个补丁在新上游**均干净应用、无冲突**，
+测试结果不变。`FirestoreSessionService` 仍抛 `SessionException(SESSION_ALREADY_EXISTS)`，
+兜底的异常契约未受影响。
+
+**已知覆盖缺口（写进 PR 而非隐藏）**：竞态兜底只认 `SessionException` +
+`SESSION_ALREADY_EXISTS`（`InMemorySessionService` / `FirestoreSessionService` 都是这样抛）。
+`VertexAiSessionService` 走远端 HTTP，失败是 `UncheckedIOException` 一类，**不在兜底范围内**——
+Vertex 上并发首轮仍会有一个请求失败。没有放宽成「任何创建错误都重查」，因为那会连真实故障
+一起吞掉。这一点在 issue 勘误和 PR 正文里都写明了。
+
+**两处行为变化（主动写进 PR，不等 reviewer 发现）**：
+
+1. **持有 contextId 即可读到该会话历史**。修复前 `userId` 已由 contextId 派生
+   （`A2A_USER_<contextId>`），但 `sessionId` 是独立随机 UUID，光有 contextId 拿不到历史；
+   修复后两者合一，历史可直达。这是「会话锚点」的应有语义，且服务端生成的 contextId 是
+   UUID，风险面不变；但客户端若硬编码 contextId（如 README 的 `cli-demo-context`），
+   同一字符串的使用者会共享该会话——符合规范，但值得知情。
+2. **升级后旧会话不延续**。修复前的 session 以随机 UUID 存储，没有 contextId 记录，
+   无处迁移；升级后带旧 contextId 的追问会新开会话。因为旧代码本来也无法多轮，不算回归。
+
+---
+
+## 3.（预留）后续 PR / 其他贡献
+
+**一次险些发出的坏提交（2026-10-28，已拦下）**：做「移除修复 → 验证回归」时用
+`git checkout origin/main -- AgentExecutor.java` 把上游版本写进了**暂存区**，验证完
+`cp` 回工作区却没有 `git add`。随后 `--amend` 只带了两个测试文件，生成的新提交
+`cc2a418` **只含测试、不含修复**——若直接 force-push，PR 会变成一个「测试必然失败」
+的坏提交。靠 amend 后复查 `git show --stat`（文件数从 3 变 2）发现，补 `git add`
+重新 amend 为 `9e8dd4f` 才推送。
+
+**教训**：`git checkout <ref> -- <path>` 会**同时写工作区和暂存区**；验证类操作之后
+必须确认 `git status` 没有 `MM`，且 amend 后要核对 `git show --stat` 的文件数。

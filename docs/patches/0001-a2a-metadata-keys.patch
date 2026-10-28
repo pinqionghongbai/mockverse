@@ -1,0 +1,194 @@
+From 1c1c33b7dd585915f236f29f292124ec6ff0a9cd Mon Sep 17 00:00:00 2001
+From: hongbailingmeng <3471972616@qq.com>
+Date: Wed, 28 Oct 2026 11:42:45 +0800
+Subject: [PATCH] fix(a2a): read the A2A ids from the keys that are actually
+ written
+
+ResponseConverter stores the task and context ids in an event's custom
+metadata under AdkMetadataKey, which prefixes them with "a2a:". EventConverter
+read them back under "adk_task_id" and "adk_context_id", keys nothing writes,
+so taskId(event) and contextId(event) returned an empty string for every event
+the A2A converters produced.
+
+RemoteA2AAgent relies on both accessors when it builds a follow-up message for
+a function response, so the task and context ids were silently dropped from
+the outgoing request.
+
+The constants now carry the keys ResponseConverter writes. EventConverterTest
+asserts they match AdkMetadataKey, so the two cannot drift apart again -- the
+existing round-trip tests could not catch this, because they build the event
+with the same constant they read it back with.
+
+Covered by ContextIdRoundTripTest, which asserts the ids survive
+ResponseConverter -> EventConverter.
+---
+ .../adk/a2a/converters/EventConverter.java    |  11 +-
+ .../converters/ContextIdRoundTripTest.java    | 111 ++++++++++++++++++
+ .../a2a/converters/EventConverterTest.java    |  11 ++
+ 3 files changed, 131 insertions(+), 2 deletions(-)
+ create mode 100644 a2a/src/test/java/com/google/adk/a2a/converters/ContextIdRoundTripTest.java
+
+diff --git a/a2a/src/main/java/com/google/adk/a2a/converters/EventConverter.java b/a2a/src/main/java/com/google/adk/a2a/converters/EventConverter.java
+index df10a9c..d4841b7 100644
+--- a/a2a/src/main/java/com/google/adk/a2a/converters/EventConverter.java
++++ b/a2a/src/main/java/com/google/adk/a2a/converters/EventConverter.java
+@@ -31,8 +31,15 @@ import org.jspecify.annotations.Nullable;
+ 
+ /** Converter for ADK Events to A2A Messages. */
+ public final class EventConverter {
+-  public static final String ADK_TASK_ID_KEY = "adk_task_id";
+-  public static final String ADK_CONTEXT_ID_KEY = "adk_context_id";
++  /**
++   * Keys the A2A ids are stored under in an event's custom metadata.
++   *
++   * <p>They have to match {@link AdkMetadataKey}, which is what {@link ResponseConverter} uses when
++   * it writes those ids into an event. {@code EventConverterTest} keeps the two in step.
++   */
++  public static final String ADK_TASK_ID_KEY = "a2a:task_id";
++
++  public static final String ADK_CONTEXT_ID_KEY = "a2a:context_id";
+ 
+   private EventConverter() {}
+ 
+diff --git a/a2a/src/test/java/com/google/adk/a2a/converters/ContextIdRoundTripTest.java b/a2a/src/test/java/com/google/adk/a2a/converters/ContextIdRoundTripTest.java
+new file mode 100644
+index 0000000..fff1ae1
+--- /dev/null
++++ b/a2a/src/test/java/com/google/adk/a2a/converters/ContextIdRoundTripTest.java
+@@ -0,0 +1,111 @@
++/*
++ * Copyright 2026 Google LLC
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.google.adk.a2a.converters;
++
++import static com.google.common.truth.Truth.assertThat;
++
++import com.google.adk.agents.InvocationContext;
++import com.google.adk.agents.RunConfig;
++import com.google.adk.artifacts.InMemoryArtifactService;
++import com.google.adk.events.Event;
++import com.google.adk.plugins.PluginManager;
++import com.google.adk.sessions.InMemorySessionService;
++import com.google.adk.sessions.Session;
++import com.google.common.collect.ImmutableList;
++import io.a2a.spec.Message;
++import io.a2a.spec.Task;
++import io.a2a.spec.TaskState;
++import io.a2a.spec.TaskStatus;
++import io.a2a.spec.TextPart;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.junit.runners.JUnit4;
++
++/**
++ * Verifies that a context id survives the A2A-to-ADK conversion.
++ *
++ * <p>{@link RemoteA2AAgent} reads the context id back out of the converted event with {@link
++ * EventConverter#contextId}, so the two converters have to agree on the metadata key.
++ */
++@RunWith(JUnit4.class)
++public final class ContextIdRoundTripTest {
++
++  private InvocationContext invocationContext;
++
++  @Before
++  public void setUp() {
++    Session session =
++        Session.builder("session-1")
++            .appName("demo")
++            .userId("user")
++            .events(ImmutableList.of())
++            .build();
++    invocationContext =
++        InvocationContext.builder()
++            .sessionService(new InMemorySessionService())
++            .artifactService(new InMemoryArtifactService())
++            .pluginManager(new PluginManager())
++            .invocationId("invocation-1")
++            .agent(new TestAgent())
++            .session(session)
++            .runConfig(RunConfig.builder().build())
++            .endInvocation(false)
++            .build();
++  }
++
++  @Test
++  public void taskToEvent_thenContextId_returnsThePeerContextId() {
++    Task task =
++        new Task.Builder()
++            .id("task-1")
++            .contextId("context-1")
++            .status(
++                new TaskStatus(
++                    TaskState.COMPLETED,
++                    new Message.Builder()
++                        .role(Message.Role.AGENT)
++                        .parts(ImmutableList.of(new TextPart("done")))
++                        .build(),
++                    null))
++            .build();
++
++    Event event = ResponseConverter.taskToEvent(task, invocationContext);
++
++    assertThat(event.customMetadata().get()).isNotEmpty();
++    assertThat(EventConverter.contextId(event)).isEqualTo("context-1");
++    assertThat(EventConverter.taskId(event)).isEqualTo("task-1");
++  }
++
++  private static final class TestAgent extends com.google.adk.agents.BaseAgent {
++    TestAgent() {
++      super("test_agent", "test", ImmutableList.of(), null, null);
++    }
++
++    @Override
++    protected io.reactivex.rxjava3.core.Flowable<Event> runAsyncImpl(
++        InvocationContext invocationContext) {
++      return io.reactivex.rxjava3.core.Flowable.empty();
++    }
++
++    @Override
++    protected io.reactivex.rxjava3.core.Flowable<Event> runLiveImpl(
++        InvocationContext invocationContext) {
++      return io.reactivex.rxjava3.core.Flowable.empty();
++    }
++  }
++}
+diff --git a/a2a/src/test/java/com/google/adk/a2a/converters/EventConverterTest.java b/a2a/src/test/java/com/google/adk/a2a/converters/EventConverterTest.java
+index 51fc318..11584c4 100644
+--- a/a2a/src/test/java/com/google/adk/a2a/converters/EventConverterTest.java
++++ b/a2a/src/test/java/com/google/adk/a2a/converters/EventConverterTest.java
+@@ -79,6 +79,17 @@ public final class EventConverterTest {
+     assertThat(EventConverter.contextId(e)).isEmpty();
+   }
+ 
++  /**
++   * The accessors read the keys that {@link ResponseConverter} writes through {@link
++   * AdkMetadataKey}, so the two have to agree. Reading a different key returns an empty string,
++   * which is indistinguishable from "the event has no id".
++   */
++  @Test
++  public void idKeys_matchTheKeysResponseConverterWrites() {
++    assertThat(EventConverter.ADK_TASK_ID_KEY).isEqualTo(AdkMetadataKey.TASK_ID.getType());
++    assertThat(EventConverter.ADK_CONTEXT_ID_KEY).isEqualTo(AdkMetadataKey.CONTEXT_ID.getType());
++  }
++
+   @Test
+   public void testFindUserFunctionCall_success() {
+     Event agentEvent = Event.builder().author("agent").build();
+-- 
+2.49.0.windows.1
+

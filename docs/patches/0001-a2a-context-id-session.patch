@@ -1,0 +1,546 @@
+From 9e8dd4fed75340839159500b46e5ea2098dc7351 Mon Sep 17 00:00:00 2001
+From: hongbailingmeng <3471972616@qq.com>
+Date: Wed, 28 Oct 2026 11:20:19 +0800
+Subject: [PATCH] fix(a2a): create the session under the A2A context id
+
+AgentExecutor looked a session up by the request's contextId, but created it
+with createSession(appName, userId), the overload that lets the service
+generate the id. InMemorySessionService generates a UUID when no id is given,
+so the stored session never matched the id the next turn asked for: every turn
+found nothing, created another session, and the agent started from an empty
+history.
+
+The A2A context id is the anchor a client sends back on a follow-up message,
+so it is now passed as the session id on creation as well. A request without a
+context id still gets a generated one, because RequestContext assigns a UUID
+before AgentExecutor sees the request.
+
+Using a caller-chosen id makes two first turns with the same new context id
+collide, which they could not do when each turn invented its own UUID. A
+service that rejects duplicate ids (InMemorySessionService's documented next
+default) would fail the losing request, and that peer would receive a failed
+task. createSession therefore falls back to reading the session the winner
+created, and only for "already exists" -- any other failure still surfaces.
+
+This mirrors adk-python, where the request converter sets
+session_id=request.context_id and the executor passes it on to create_session.
+
+Covered at two levels. ContextIdSessionReuseTest drives the executor directly:
+two turns sharing a context id land in one session, the second turn sees the
+first turn's events, a turn that loses the creation race joins the winner's
+session, and an unrelated creation failure still fails the turn.
+ContextIdEndToEndTest goes through DefaultRequestHandler.onMessageSend, so the
+request context is built by the A2A SDK from MessageSendParams the way a real
+client reaches it.
+---
+ .../adk/a2a/executor/AgentExecutor.java       |  50 +++-
+ .../a2a/executor/ContextIdEndToEndTest.java   | 172 ++++++++++++
+ .../executor/ContextIdSessionReuseTest.java   | 246 ++++++++++++++++++
+ 3 files changed, 462 insertions(+), 6 deletions(-)
+ create mode 100644 a2a/src/test/java/com/google/adk/a2a/executor/ContextIdEndToEndTest.java
+ create mode 100644 a2a/src/test/java/com/google/adk/a2a/executor/ContextIdSessionReuseTest.java
+
+diff --git a/a2a/src/main/java/com/google/adk/a2a/executor/AgentExecutor.java b/a2a/src/main/java/com/google/adk/a2a/executor/AgentExecutor.java
+index 618888c..62fd949 100644
+--- a/a2a/src/main/java/com/google/adk/a2a/executor/AgentExecutor.java
++++ b/a2a/src/main/java/com/google/adk/a2a/executor/AgentExecutor.java
+@@ -29,6 +29,7 @@ import com.google.adk.plugins.Plugin;
+ import com.google.adk.runner.Runner;
+ import com.google.adk.sessions.BaseSessionService;
+ import com.google.adk.sessions.Session;
++import com.google.adk.sessions.SessionException;
+ import com.google.common.base.Ascii;
+ import com.google.common.collect.ImmutableList;
+ import com.google.errorprone.annotations.CanIgnoreReturnValue;
+@@ -309,15 +310,52 @@ public class AgentExecutor implements io.a2a.server.agentexecution.AgentExecutor
+     return runConfig.toBuilder().customMetadata(customMetadata).build();
+   }
+ 
++  /**
++   * Returns the session this request belongs to, creating it on the first turn.
++   *
++   * <p>The A2A {@code contextId} is the anchor for a multi-turn conversation, so it is used as the
++   * session id as well: a follow-up message carrying the context id of the previous response lands
++   * in the same session and the agent sees the earlier turns. Creating the session without an id
++   * would let the service generate a fresh one, and every turn would then start from an empty
++   * history. adk-python resolves the same way, by passing the context id as {@code session_id}.
++   */
+   private Maybe<Session> prepareSession(
+       RequestContext ctx, String appName, BaseSessionService service) {
++    String userId = getUserId(ctx);
++    String contextId = ctx.getContextId();
+     return service
+-        .getSession(appName, getUserId(ctx), ctx.getContextId(), Optional.empty())
+-        .switchIfEmpty(
+-            Maybe.defer(
+-                () -> {
+-                  return service.createSession(appName, getUserId(ctx)).toMaybe();
+-                }));
++        .getSession(appName, userId, contextId, Optional.empty())
++        .switchIfEmpty(Maybe.defer(() -> createSession(appName, userId, contextId, service)));
++  }
++
++  /**
++   * Creates the session for {@code contextId}, tolerating a concurrent first turn that won the
++   * race.
++   *
++   * <p>Two first turns carrying the same new context id can both miss {@code getSession} and both
++   * try to create. A service that rejects duplicate ids then fails the losing request, which would
++   * surface to that peer as a failed task. Re-reading the session the winner created turns that
++   * into an ordinary turn.
++   */
++  private static Maybe<Session> createSession(
++      String appName, String userId, String contextId, BaseSessionService service) {
++    return service
++        .createSession(appName, userId, /* state= */ (Map<String, Object>) null, contextId)
++        .onErrorResumeNext(
++            error -> {
++              if (!isSessionAlreadyExists(error)) {
++                return Single.error(error);
++              }
++              return service
++                  .getSession(appName, userId, contextId, Optional.empty())
++                  .switchIfEmpty(Single.error(error));
++            })
++        .toMaybe();
++  }
++
++  private static boolean isSessionAlreadyExists(Throwable error) {
++    return error instanceof SessionException
++        && SessionException.SESSION_ALREADY_EXISTS.equals(error.getMessage());
+   }
+ 
+   /**
+diff --git a/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdEndToEndTest.java b/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdEndToEndTest.java
+new file mode 100644
+index 0000000..b8e8395
+--- /dev/null
++++ b/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdEndToEndTest.java
+@@ -0,0 +1,172 @@
++/*
++ * Copyright 2026 Google LLC
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.google.adk.a2a.executor;
++
++import static com.google.common.truth.Truth.assertThat;
++
++import com.google.adk.agents.BaseAgent;
++import com.google.adk.agents.InvocationContext;
++import com.google.adk.apps.App;
++import com.google.adk.artifacts.InMemoryArtifactService;
++import com.google.adk.events.Event;
++import com.google.adk.sessions.InMemorySessionService;
++import com.google.adk.sessions.Session;
++import com.google.common.collect.ImmutableList;
++import com.google.genai.types.Content;
++import com.google.genai.types.Part;
++import io.a2a.server.ServerCallContext;
++import io.a2a.server.events.InMemoryQueueManager;
++import io.a2a.server.requesthandlers.DefaultRequestHandler;
++import io.a2a.server.tasks.InMemoryPushNotificationConfigStore;
++import io.a2a.server.tasks.InMemoryTaskStore;
++import io.a2a.spec.Message;
++import io.a2a.spec.MessageSendParams;
++import io.a2a.spec.TextPart;
++import io.reactivex.rxjava3.core.Flowable;
++import java.util.Map;
++import java.util.Optional;
++import java.util.Set;
++import java.util.concurrent.atomic.AtomicInteger;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.junit.runners.JUnit4;
++
++/**
++ * Two {@code message/send} calls through the A2A request handler, the way a JSON-RPC transport
++ * drives them, sharing one {@code contextId}.
++ *
++ * <p>This covers the layer the other tests skip: the request context is built by the A2A SDK from
++ * {@link MessageSendParams}, so the context id travels the whole path a real client takes rather
++ * than being handed to the executor by the test.
++ */
++@RunWith(JUnit4.class)
++public final class ContextIdEndToEndTest {
++
++  private static final String APP = "test_app";
++  private static final String CONTEXT_ID = "ctx-e2e";
++  private static final String USER_ID = "A2A_USER_" + CONTEXT_ID;
++
++  private InMemorySessionService sessions;
++  private HistoryAgent agent;
++  private DefaultRequestHandler handler;
++
++  @Before
++  public void setUp() {
++    sessions = new InMemorySessionService();
++    agent = new HistoryAgent();
++
++    AgentExecutor executor =
++        new AgentExecutor.Builder()
++            .app(App.builder().name(APP).rootAgent(agent).build())
++            .sessionService(sessions)
++            .artifactService(new InMemoryArtifactService())
++            .agentExecutorConfig(AgentExecutorConfig.builder().build())
++            .build();
++
++    InMemoryTaskStore taskStore = new InMemoryTaskStore();
++    handler =
++        DefaultRequestHandler.create(
++            executor,
++            taskStore,
++            new InMemoryQueueManager(taskStore),
++            new InMemoryPushNotificationConfigStore(),
++            task -> {},
++            Runnable::run);
++  }
++
++  @Test
++  public void twoSendsSharingAContextId_continueTheSameConversation() {
++    handler.onMessageSend(send("msg-1", "task-1", "remember the code word", CONTEXT_ID), call());
++    int historyAfterFirstTurn = agent.lastHistorySize;
++
++    handler.onMessageSend(send("msg-2", "task-2", "what was the code word?", CONTEXT_ID), call());
++
++    assertThat(agent.lastSessionId).isEqualTo(CONTEXT_ID);
++    assertThat(agent.lastHistorySize).isGreaterThan(historyAfterFirstTurn);
++    assertThat(storedSession().map(Session::id)).hasValue(CONTEXT_ID);
++  }
++
++  @Test
++  public void twoSendsWithoutAContextId_getSeparateConversations() {
++    handler.onMessageSend(send("msg-1", "task-1", "one", null), call());
++    String firstSession = agent.lastSessionId;
++
++    handler.onMessageSend(send("msg-2", "task-2", "two", null), call());
++
++    // The service generated a context id for each request, so neither turn sees the other.
++    assertThat(firstSession).isNotEmpty();
++    assertThat(agent.lastSessionId).isNotEqualTo(firstSession);
++  }
++
++  private Optional<Session> storedSession() {
++    return sessions
++        .getSession(APP, USER_ID, CONTEXT_ID, Optional.empty())
++        .map(Optional::of)
++        .defaultIfEmpty(Optional.empty())
++        .blockingGet();
++  }
++
++  private static ServerCallContext call() {
++    return new ServerCallContext(null, Map.of(), Set.of());
++  }
++
++  private static MessageSendParams send(
++      String messageId, String taskId, String text, String contextId) {
++    Message message =
++        new Message.Builder()
++            .messageId(messageId)
++            .taskId(taskId)
++            .contextId(contextId)
++            .role(Message.Role.USER)
++            .parts(ImmutableList.of(new TextPart(text)))
++            .build();
++    return new MessageSendParams.Builder().message(message).build();
++  }
++
++  /** Records what the agent could see on each turn. */
++  private static final class HistoryAgent extends BaseAgent {
++    private final AtomicInteger eventId = new AtomicInteger();
++    private volatile String lastSessionId;
++    private volatile int lastHistorySize;
++
++    HistoryAgent() {
++      super("history_agent", "test", ImmutableList.of(), null, null);
++    }
++
++    @Override
++    protected Flowable<Event> runAsyncImpl(InvocationContext invocationContext) {
++      lastSessionId = invocationContext.session().id();
++      lastHistorySize = invocationContext.session().immutableEvents().size();
++      return Flowable.just(
++          Event.builder()
++              .id("event-" + eventId.incrementAndGet())
++              .author("history_agent")
++              .content(
++                  Content.builder()
++                      .role("model")
++                      .parts(ImmutableList.of(Part.builder().text("ok").build()))
++                      .build())
++              .build());
++    }
++
++    @Override
++    protected Flowable<Event> runLiveImpl(InvocationContext invocationContext) {
++      return Flowable.empty();
++    }
++  }
++}
+diff --git a/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdSessionReuseTest.java b/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdSessionReuseTest.java
+new file mode 100644
+index 0000000..116f4cb
+--- /dev/null
++++ b/a2a/src/test/java/com/google/adk/a2a/executor/ContextIdSessionReuseTest.java
+@@ -0,0 +1,246 @@
++/*
++ * Copyright 2026 Google LLC
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.google.adk.a2a.executor;
++
++import static com.google.common.truth.Truth.assertThat;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.doAnswer;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++import com.google.adk.agents.BaseAgent;
++import com.google.adk.agents.InvocationContext;
++import com.google.adk.apps.App;
++import com.google.adk.artifacts.InMemoryArtifactService;
++import com.google.adk.events.Event;
++import com.google.adk.sessions.BaseSessionService;
++import com.google.adk.sessions.InMemorySessionService;
++import com.google.adk.sessions.Session;
++import com.google.adk.sessions.SessionException;
++import com.google.common.collect.ImmutableList;
++import com.google.genai.types.Content;
++import com.google.genai.types.Part;
++import io.a2a.server.agentexecution.RequestContext;
++import io.a2a.server.events.EventQueue;
++import io.a2a.spec.Message;
++import io.a2a.spec.TaskStatusUpdateEvent;
++import io.a2a.spec.TextPart;
++import io.reactivex.rxjava3.core.Flowable;
++import io.reactivex.rxjava3.core.Maybe;
++import io.reactivex.rxjava3.core.Single;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++import java.util.Optional;
++import java.util.concurrent.atomic.AtomicInteger;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.junit.runners.JUnit4;
++
++/**
++ * Verifies that the A2A {@code contextId} anchors the ADK session across turns.
++ *
++ * <p>A2A defines the context id as the identifier a client sends back on a follow-up message so
++ * that the remote agent continues the same conversation. That only holds if the context id and the
++ * session id are the same value.
++ */
++@RunWith(JUnit4.class)
++public final class ContextIdSessionReuseTest {
++
++  private static final String APP_NAME = "test_app";
++  private static final String CONTEXT_ID = "context-1";
++  private static final String USER_ID = "A2A_USER_" + CONTEXT_ID;
++
++  private EventQueue eventQueue;
++  private InMemorySessionService sessionService;
++  private RecordingAgent agent;
++  private AgentExecutor executor;
++  private final List<String> finalStates = new ArrayList<>();
++
++  @Before
++  public void setUp() {
++    eventQueue = mock(EventQueue.class);
++    doAnswer(
++            invocation -> {
++              Object event = invocation.getArgument(0);
++              if (event instanceof TaskStatusUpdateEvent statusEvent && statusEvent.isFinal()) {
++                finalStates.add(statusEvent.getStatus().state().toString());
++              }
++              return null;
++            })
++        .when(eventQueue)
++        .enqueueEvent(any());
++
++    sessionService = new InMemorySessionService();
++    agent = new RecordingAgent();
++    executor =
++        new AgentExecutor.Builder()
++            .app(App.builder().name(APP_NAME).rootAgent(agent).build())
++            .sessionService(sessionService)
++            .artifactService(new InMemoryArtifactService())
++            .agentExecutorConfig(AgentExecutorConfig.builder().build())
++            .build();
++  }
++
++  @Test
++  public void execute_secondTurnWithSameContextId_reusesTheFirstTurnSession() {
++    executor.execute(requestContext("task-1"), eventQueue);
++    String firstTurnSessionId = agent.lastSessionId;
++
++    executor.execute(requestContext("task-2"), eventQueue);
++
++    assertThat(agent.lastSessionId).isEqualTo(firstTurnSessionId);
++  }
++
++  @Test
++  public void execute_secondTurnWithSameContextId_seesTheFirstTurnHistory() {
++    executor.execute(requestContext("task-1"), eventQueue);
++    int firstTurnEventCount = agent.lastEventCount;
++
++    executor.execute(requestContext("task-2"), eventQueue);
++
++    assertThat(agent.lastEventCount).isGreaterThan(firstTurnEventCount);
++  }
++
++  @Test
++  public void execute_firstTurn_storesTheSessionUnderTheContextId() {
++    executor.execute(requestContext("task-1"), eventQueue);
++
++    assertThat(sessionIdForContext()).isEqualTo(CONTEXT_ID);
++  }
++
++  /**
++   * Two first turns with the same new context id can both miss {@code getSession}. A service that
++   * rejects duplicate ids fails the loser; the turn must recover by re-reading the session the
++   * winner created, instead of handing the peer a failed task.
++   */
++  @Test
++  public void createLosingTheRaceToAnotherTurn_fallsBackToTheSessionItCreated() {
++    Session winner = Session.builder(CONTEXT_ID).appName(APP_NAME).userId(USER_ID).build();
++    BaseSessionService racing = mock(BaseSessionService.class);
++    // The first read misses, so the executor tries to create and loses the race. Every read after
++    // that -- the fallback's, and the one Runner does before running -- finds the winner's session.
++    when(racing.getSession(APP_NAME, USER_ID, CONTEXT_ID, Optional.empty()))
++        .thenReturn(Maybe.empty())
++        .thenReturn(Maybe.just(winner));
++    when(racing.createSession(APP_NAME, USER_ID, (Map<String, Object>) null, CONTEXT_ID))
++        .thenReturn(Single.error(new SessionException(SessionException.SESSION_ALREADY_EXISTS)));
++    when(racing.appendEvent(any(), any()))
++        .thenAnswer(invocation -> Single.just(invocation.getArgument(1)));
++
++    RecordingAgent racingAgent = new RecordingAgent();
++    AgentExecutor racingExecutor =
++        new AgentExecutor.Builder()
++            .app(App.builder().name(APP_NAME).rootAgent(racingAgent).build())
++            .sessionService(racing)
++            .artifactService(new InMemoryArtifactService())
++            .agentExecutorConfig(AgentExecutorConfig.builder().build())
++            .build();
++
++    racingExecutor.execute(requestContext("task-1"), eventQueue);
++
++    assertThat(racingAgent.lastSessionId).isEqualTo(CONTEXT_ID);
++  }
++
++  /** A creation failure that is not "already exists" must still surface. */
++  @Test
++  public void createFailingForAnotherReason_failsTheTurn() {
++    BaseSessionService failing = mock(BaseSessionService.class);
++    when(failing.getSession(APP_NAME, USER_ID, CONTEXT_ID, Optional.empty()))
++        .thenReturn(Maybe.empty());
++    when(failing.createSession(APP_NAME, USER_ID, (Map<String, Object>) null, CONTEXT_ID))
++        .thenReturn(Single.error(new SessionException("backend unavailable")));
++
++    RecordingAgent failingAgent = new RecordingAgent();
++    AgentExecutor failingExecutor =
++        new AgentExecutor.Builder()
++            .app(App.builder().name(APP_NAME).rootAgent(failingAgent).build())
++            .sessionService(failing)
++            .artifactService(new InMemoryArtifactService())
++            .agentExecutorConfig(AgentExecutorConfig.builder().build())
++            .build();
++
++    failingExecutor.execute(requestContext("task-1"), eventQueue);
++
++    assertThat(failingAgent.lastSessionId).isNull();
++    assertThat(lastFinalState()).isEqualTo("FAILED");
++  }
++
++  private String lastFinalState() {
++    return finalStates.isEmpty() ? "" : finalStates.get(finalStates.size() - 1);
++  }
++
++  private String sessionIdForContext() {
++    return sessionService
++        .getSession(APP_NAME, USER_ID, CONTEXT_ID, Optional.empty())
++        .map(Session::id)
++        .defaultIfEmpty("")
++        .blockingGet();
++  }
++
++  private static RequestContext requestContext(String taskId) {
++    Message message =
++        new Message.Builder()
++            .messageId("msg-" + taskId)
++            .taskId(taskId)
++            .contextId(CONTEXT_ID)
++            .role(Message.Role.USER)
++            .parts(ImmutableList.of(new TextPart("turn")))
++            .build();
++
++    RequestContext ctx = mock(RequestContext.class);
++    when(ctx.getMessage()).thenReturn(message);
++    when(ctx.getTaskId()).thenReturn(taskId);
++    when(ctx.getContextId()).thenReturn(CONTEXT_ID);
++    when(ctx.getTask()).thenReturn(null);
++    when(ctx.getParams()).thenReturn(null);
++    return ctx;
++  }
++
++  private static final class RecordingAgent extends BaseAgent {
++    private final AtomicInteger eventId = new AtomicInteger();
++    private volatile String lastSessionId;
++    private volatile int lastEventCount;
++
++    RecordingAgent() {
++      super("recording_agent", "test", ImmutableList.of(), null, null);
++    }
++
++    @Override
++    protected Flowable<Event> runAsyncImpl(InvocationContext invocationContext) {
++      lastSessionId = invocationContext.session().id();
++      lastEventCount = invocationContext.session().immutableEvents().size();
++      Event event =
++          Event.builder()
++              .id("event-" + eventId.incrementAndGet())
++              .author("recording_agent")
++              .content(
++                  Content.builder()
++                      .role("model")
++                      .parts(ImmutableList.of(Part.builder().text("ok").build()))
++                      .build())
++              .build();
++      return Flowable.just(event);
++    }
++
++    @Override
++    protected Flowable<Event> runLiveImpl(InvocationContext invocationContext) {
++      return Flowable.empty();
++    }
++  }
++}
+-- 
+2.49.0.windows.1
+

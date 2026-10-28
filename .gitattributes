@@ -1,0 +1,3 @@
+# 补丁文件必须保持 LF：git am 重放时行尾会原样写进目标仓库，
+# Windows 检出若转成 CRLF，会污染被修改的 Java 文件。
+docs/patches/*.patch text eol=lf
